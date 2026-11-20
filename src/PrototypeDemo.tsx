@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { handleSpatialKeyDown } from "./spatialNav";
 import {
   ArrowLeft,
   ArrowRight,
@@ -382,6 +383,8 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [showPayload, setShowPayload] = useState(false);
   const [privacyTab, setPrivacyTab] = useState<"outbound" | "redacted">("outbound");
   const [selectedTraceNode, setSelectedTraceNode] = useState<string | null>(null);
+  const [focusedTraceIndex, setFocusedTraceIndex] = useState(0);
+  const [focusedHandoffIndex, setFocusedHandoffIndex] = useState(0);
   const [checkedHandoff, setCheckedHandoff] = useState<Record<number, boolean>>({});
   const [isEditingHandoff, setIsEditingHandoff] = useState(false);
   const [handoffDraft, setHandoffDraft] = useState("");
@@ -595,6 +598,21 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
       setIntakeSubmitting(false);
     }
   }
+
+  useEffect(() => {
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (verifyTarget) {
+        setVerifyTarget(null);
+      } else if (showIntakeModal) {
+        setShowIntakeModal(false);
+      } else if (selectedTraceNode) {
+        setSelectedTraceNode(null);
+      }
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [verifyTarget, showIntakeModal, selectedTraceNode]);
 
   useEffect(() => {
     return () => {
@@ -1216,7 +1234,19 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                         </div>
                       </div>
                     ) : (
-                      <ul id={handoffCopyId} className="mt-2.5 space-y-2">
+                      <ul
+                        id={handoffCopyId}
+                        role="listbox"
+                        aria-label="Draft specialist handoff checklist"
+                        aria-multiselectable="true"
+                        onKeyDown={(e) => {
+                          handleSpatialKeyDown(e, '[role="option"]', (next) => {
+                            const idxAttr = Number(next.dataset.handoffIndex);
+                            if (!Number.isNaN(idxAttr)) setFocusedHandoffIndex(idxAttr);
+                          });
+                        }}
+                        className="mt-2.5 space-y-2"
+                      >
                         {handoffItems.map((item, idx) => {
                           const checked = Boolean(checkedHandoff[idx]);
                           const oblId = detectObligationId(item);
@@ -1231,7 +1261,22 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                           return (
                             <li
                               key={idx}
-                              className={`flex flex-wrap items-start justify-between gap-2 rounded-lg border p-2.5 transition ${
+                              role="option"
+                              aria-selected={checked}
+                              data-handoff-index={idx}
+                              tabIndex={idx === focusedHandoffIndex ? 0 : -1}
+                              onFocus={() => setFocusedHandoffIndex(idx)}
+                              onKeyDown={(e) => {
+                                if (e.target !== e.currentTarget) return;
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setCheckedHandoff((prev) => ({
+                                    ...prev,
+                                    [idx]: !prev[idx],
+                                  }));
+                                }
+                              }}
+                              className={`flex flex-wrap items-start justify-between gap-2 rounded-lg border p-2.5 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 ${
                                 checked
                                   ? "border-emerald-200 bg-emerald-50/50"
                                   : "border-slate-100 bg-slate-50/60"
@@ -1240,6 +1285,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                               <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5">
                                 <input
                                   type="checkbox"
+                                  tabIndex={-1}
                                   checked={checked}
                                   onChange={() =>
                                     setCheckedHandoff((prev) => ({
@@ -1292,10 +1338,20 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
               </div>
             ) : null}
 
-            {/* Clickable Trace Cards 1–4 with inline Step Inspector Drawer */}
+            {/* Clickable & Arrow-Key-Navigable Trace Cards 1–4 with inline Step Inspector Drawer */}
             {trace.length > 0 && (
               <div className="space-y-3">
-                <div className="rb-trace-grid">
+                <div
+                  role="tablist"
+                  aria-label="Care-resolution workflow trace steps (use Arrow keys to move, Enter to inspect)"
+                  onKeyDown={(e) => {
+                    handleSpatialKeyDown(e, '[role="tab"]', (next) => {
+                      const idxAttr = Number(next.dataset.traceIndex);
+                      if (!Number.isNaN(idxAttr)) setFocusedTraceIndex(idxAttr);
+                    });
+                  }}
+                  className="rb-trace-grid"
+                >
                   {trace.map((step, idx) => {
                     const meta = TRACE_NODE_META[step.node] ?? {
                       title: step.node.replaceAll("_", " "),
@@ -1318,12 +1374,26 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                         <header className="flex items-start justify-between gap-2 min-w-0">
                           <button
                             type="button"
-                            aria-expanded={isSelected}
-                            onClick={() =>
+                            role="tab"
+                            id={`trace-tab-${step.node}`}
+                            aria-selected={isSelected}
+                            data-trace-index={idx}
+                            tabIndex={
+                              selectedTraceNode
+                                ? isSelected
+                                  ? 0
+                                  : -1
+                                : idx === focusedTraceIndex
+                                  ? 0
+                                  : -1
+                            }
+                            onFocus={() => setFocusedTraceIndex(idx)}
+                            onClick={() => {
+                              setFocusedTraceIndex(idx);
                               setSelectedTraceNode((prev) =>
                                 prev === step.node ? null : step.node
-                              )
-                            }
+                              );
+                            }}
                             className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600"
                           >
                             <span
@@ -1353,11 +1423,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                           </span>
                           <button
                             type="button"
-                            onClick={() =>
+                            tabIndex={-1}
+                            onClick={() => {
+                              setFocusedTraceIndex(idx);
                               setSelectedTraceNode((prev) =>
                                 prev === step.node ? null : step.node
-                              )
-                            }
+                              );
+                            }}
                             className="inline-flex items-center gap-1 text-[10px] font-medium text-teal-700 hover:underline"
                           >
                             <Eye className="h-3 w-3 text-teal-600" aria-hidden="true" />
@@ -1402,7 +1474,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
                 {/* Step Inspector Drawer */}
                 {selectedTraceNode && (
-                  <div className="rounded-xl border border-teal-200 bg-white p-4 text-xs text-slate-700 shadow-xs">
+                  <div
+                    role="tabpanel"
+                    aria-labelledby={`trace-tab-${selectedTraceNode}`}
+                    className="rounded-xl border border-teal-200 bg-white p-4 text-xs text-slate-700 shadow-xs"
+                  >
                     <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
                       <span className="font-semibold text-slate-900">
                         {TRACE_NODE_META[selectedTraceNode]?.title ?? selectedTraceNode}
@@ -1572,14 +1648,22 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     <div
                       role="tablist"
                       aria-label="PHI redaction inspection view"
+                      onKeyDown={(e) => {
+                        handleSpatialKeyDown(e, '[role="tab"]', (next) => {
+                          const tabKey = next.dataset.tab as "outbound" | "redacted" | undefined;
+                          if (tabKey) setPrivacyTab(tabKey);
+                        });
+                      }}
                       className="inline-flex rounded-lg border border-indigo-200 bg-white p-0.5"
                     >
                       <button
                         type="button"
                         role="tab"
+                        data-tab="outbound"
                         aria-selected={privacyTab === "outbound"}
+                        tabIndex={privacyTab === "outbound" ? 0 : -1}
                         onClick={() => setPrivacyTab("outbound")}
-                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-600 ${
                           privacyTab === "outbound"
                             ? "bg-emerald-600 text-white"
                             : "text-slate-600 hover:text-slate-900"
@@ -1590,9 +1674,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                       <button
                         type="button"
                         role="tab"
+                        data-tab="redacted"
                         aria-selected={privacyTab === "redacted"}
+                        tabIndex={privacyTab === "redacted" ? 0 : -1}
                         onClick={() => setPrivacyTab("redacted")}
-                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-600 ${
                           privacyTab === "redacted"
                             ? "bg-indigo-600 text-white"
                             : "text-slate-600 hover:text-slate-900"
@@ -2064,14 +2150,22 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
             <div
               role="tablist"
               aria-label="Clinical data intake mode"
+              onKeyDown={(e) => {
+                handleSpatialKeyDown(e, '[role="tab"]', (next) => {
+                  const tabKey = next.dataset.tab as "manual" | "table" | undefined;
+                  if (tabKey) setIntakeTab(tabKey);
+                });
+              }}
               className="mt-4 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 text-xs"
             >
               <button
                 type="button"
                 role="tab"
+                data-tab="manual"
                 aria-selected={intakeTab === "manual"}
+                tabIndex={intakeTab === "manual" ? 0 : -1}
                 onClick={() => setIntakeTab("manual")}
-                className={`rounded-md px-3 py-1.5 font-medium transition ${
+                className={`rounded-md px-3 py-1.5 font-medium transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-teal-600 ${
                   intakeTab === "manual"
                     ? "bg-white text-teal-800 shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
@@ -2082,9 +2176,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
               <button
                 type="button"
                 role="tab"
+                data-tab="table"
                 aria-selected={intakeTab === "table"}
+                tabIndex={intakeTab === "table" ? 0 : -1}
                 onClick={() => setIntakeTab("table")}
-                className={`rounded-md px-3 py-1.5 font-medium transition ${
+                className={`rounded-md px-3 py-1.5 font-medium transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-teal-600 ${
                   intakeTab === "table"
                     ? "bg-white text-teal-800 shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
