@@ -168,8 +168,9 @@ def synthesize_coordination_brief(state: TransitionState) -> dict[str, Any]:
             "execution": "agentic" if synthesis["mode"] == "openrouter" else "deterministic_fallback",
             "phi_exposed": False,
             "detail": (
-                f"Synthesized clinician handoff via {synthesis['provider']} "
-                f"(model: {synthesis['model']}) using de-identified payload only."
+                "Drafted clinician handoff brief via OpenRouter for OB-GYN sign-off."
+                if synthesis["mode"] == "openrouter"
+                else "Drafted clinician handoff brief via local deterministic fallback."
             ),
         }
     )

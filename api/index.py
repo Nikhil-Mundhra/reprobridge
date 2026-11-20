@@ -173,8 +173,9 @@ def _stream_transition_events(event_type: str) -> Iterator[str]:
             "execution": "agentic" if synthesis["mode"] == "openrouter" else "deterministic_fallback",
             "phi_exposed": False,
             "detail": (
-                f"Synthesized clinician handoff via {synthesis['provider']} "
-                f"(model: {synthesis['model']}) using de-identified payload only."
+                "Drafted clinician handoff brief via OpenRouter for OB-GYN sign-off."
+                if synthesis["mode"] == "openrouter"
+                else "Drafted clinician handoff brief via local deterministic fallback."
             ),
         }
     )

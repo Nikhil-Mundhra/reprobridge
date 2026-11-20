@@ -125,22 +125,16 @@ const TRACE_NODE_META: Record<
   },
 };
 
-function formatExecutionLabel(
-  execution?: string,
-  model?: string | null
-): { label: string; className: string } {
+function formatExecutionLabel(execution?: string): { label: string; className: string } {
   if (execution === "agentic") {
-    const shortModel = model
-      ? model.replace(/:free$/, "").split("/").pop() ?? model
-      : "OpenRouter";
     return {
-      label: `Agentic · ${shortModel}`,
+      label: "Agentic",
       className: "border-purple-200 bg-purple-50 text-purple-800",
     };
   }
   if (execution === "deterministic_fallback") {
     return {
-      label: "Deterministic Fallback",
+      label: "Fallback",
       className: "border-amber-200 bg-amber-50 text-amber-800",
     };
   }
@@ -780,38 +774,31 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     accent: "border-t-teal-500",
                     badge: "bg-teal-100 text-teal-800",
                   };
-                  const exec = formatExecutionLabel(
-                    step.execution,
-                    aiMetadata?.model ?? streamingModel
-                  );
+                  const exec = formatExecutionLabel(step.execution);
 
                   return (
                     <article
                       key={step.node}
+                      title={step.node}
                       className={`rb-trace-card rounded-xl border border-slate-200/90 border-t-2 ${meta.accent} bg-white p-3.5 text-xs shadow-xs`}
                     >
-                      <header className="min-w-0 space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span
-                              className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-bold ${meta.badge}`}
-                            >
-                              {idx + 1}
-                            </span>
-                            <h4 className="font-semibold leading-snug text-slate-900">
-                              {meta.title}
-                            </h4>
-                          </div>
-                          {idx < 3 && (
-                            <ArrowRight
-                              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-400"
-                              aria-hidden="true"
-                            />
-                          )}
+                      <header className="flex items-start justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-bold ${meta.badge}`}
+                          >
+                            {idx + 1}
+                          </span>
+                          <h4 className="font-semibold leading-snug text-slate-900">
+                            {meta.title}
+                          </h4>
                         </div>
-                        <p className="break-all font-mono text-[10px] text-slate-400">
-                          {step.node}
-                        </p>
+                        {idx < 3 && (
+                          <ArrowRight
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-400"
+                            aria-hidden="true"
+                          />
+                        )}
                       </header>
 
                       <p className="leading-relaxed text-slate-600">{step.detail}</p>
@@ -831,19 +818,17 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                   );
                 })}
                 {isStreaming && trace.length === 3 && (
-                  <article className="rb-trace-card rounded-xl border border-dashed border-purple-300 border-t-2 border-t-purple-500 bg-white/90 p-3.5 text-xs shadow-xs">
-                    <header className="min-w-0 space-y-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 font-mono text-[11px] font-bold text-purple-800">
-                          4
-                        </span>
-                        <h4 className="font-semibold leading-snug text-slate-900">
-                          Synthesize Handoff Brief
-                        </h4>
-                      </div>
-                      <p className="break-all font-mono text-[10px] text-slate-400">
-                        synthesize_coordination_brief
-                      </p>
+                  <article
+                    title="synthesize_coordination_brief"
+                    className="rb-trace-card rounded-xl border border-dashed border-purple-300 border-t-2 border-t-purple-500 bg-white/90 p-3.5 text-xs shadow-xs"
+                  >
+                    <header className="flex items-center gap-2 min-w-0">
+                      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 font-mono text-[11px] font-bold text-purple-800">
+                        4
+                      </span>
+                      <h4 className="font-semibold leading-snug text-slate-900">
+                        Synthesize Handoff Brief
+                      </h4>
                     </header>
 
                     <div className="space-y-1.5">
