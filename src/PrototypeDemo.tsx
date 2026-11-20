@@ -353,9 +353,6 @@ interface FacilityStage {
   dayTag: string;
   facility: string;
   emrSystem: string;
-  stageLabel: string;
-  siloRisk: string;
-  bridgedOutcome: string;
 }
 
 const FACILITY_CONTINUITY_STAGES: FacilityStage[] = [
@@ -363,76 +360,26 @@ const FACILITY_CONTINUITY_STAGES: FacilityStage[] = [
     stageIndex: 0,
     dayTag: "Day 0",
     facility: "Mubadala Primary Care",
-    emrSystem: "Epic Ambulatory",
-    stageLabel: "Preconception",
-    siloRisk: "TSH 4.8 & Rubella IgG− sit inside an encounter PDF.",
-    bridgedOutcome: "Logged as 2 rule-versioned obligations on Malaffi Passport.",
+    emrSystem: "Epic",
   },
   {
     stageIndex: 1,
     dayTag: "Day 142",
-    facility: "Corniche Antenatal OB-GYN",
-    emrSystem: "Oracle Health / Malaffi",
-    stageLabel: "Antenatal (Trimester 1)",
-    siloRisk: "New clinic sees today's pregnancy test—prior clinic labs missed.",
-    bridgedOutcome: "Inherits 2 silent gaps: escalates TSH (≤ 72h) & locks live MMR.",
+    facility: "Corniche OB-GYN",
+    emrSystem: "Oracle",
   },
   {
     stageIndex: 2,
     dayTag: "Day 410",
     facility: "Abu Dhabi Maternity Ward",
-    emrSystem: "Inpatient Discharge EMR",
-    stageLabel: "Postpartum",
-    siloRisk: "9-month deferred vaccine forgotten at hospital discharge.",
-    bridgedOutcome: "Delivery lifts lock—auto-wakes MMR for pre-discharge closure.",
+    emrSystem: "Inpatient",
   },
 ];
 
-function getClinicalSlaMeta(obl: Obligation): {
-  windowLabel: string;
-  escalationNote: string;
-  badgeClass: string;
-} {
-  if (obl.status === "VERIFIED_CLOSED") {
-    return {
-      windowLabel: "Evidence Verified & Closed",
-      escalationNote: "Immutable closure recorded in Neon governance audit trail",
-      badgeClass: "border-emerald-200 bg-emerald-50/80 text-emerald-900",
-    };
-  }
-  if (obl.status === "DEFERRED_TO_POSTPARTUM") {
-    return {
-      windowLabel: "Locked Until Delivery",
-      escalationNote: "Contraindication guard active · Auto-queues pre-discharge order set postpartum",
-      badgeClass: "border-indigo-200 bg-indigo-50/80 text-indigo-900",
-    };
-  }
-  if (obl.status === "ESCALATED_FOR_REVIEW") {
-    if (obl.life_stage === "Postpartum") {
-      return {
-        windowLabel: "Pre-Discharge SLA: ≤ 48h",
-        escalationNote: "Auto-escalates to Postpartum OB Lead before maternal discharge if unverified",
-        badgeClass: "border-rose-200 bg-rose-50/80 text-rose-900",
-      };
-    }
-    return {
-      windowLabel: "Trimester 1 SLA: ≤ 72h",
-      escalationNote: "Auto-escalates to Maternal-Fetal Medicine Lead if repeat labs remain unverified",
-      badgeClass: "border-rose-200 bg-rose-50/80 text-rose-900",
-    };
-  }
-  if (obl.priority === "HIGH" || obl.priority === "URGENT") {
-    return {
-      windowLabel: "Preconception SLA: ≤ 14 days",
-      escalationNote: "Auto-escalates to URGENT immediately if pregnancy transition fires first",
-      badgeClass: "border-amber-200 bg-amber-50/80 text-amber-900",
-    };
-  }
-  return {
-    windowLabel: "Preventive Window: Pre-Conception",
-    escalationNote: "Preserved across facilities; carries forward automatically on life-stage change",
-    badgeClass: "border-slate-200 bg-slate-50 text-slate-700",
-  };
+function getUrgentDueChip(obl: Obligation): string | null {
+  if (obl.status !== "ESCALATED_FOR_REVIEW") return null;
+  if (obl.life_stage === "Postpartum") return "Pre-discharge ≤ 48h";
+  return "Due ≤ 72h";
 }
 
 function buildOutboundFhirBundle(
@@ -1173,10 +1120,10 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           <div className="flex flex-wrap items-center gap-2">
             <span
               className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-medium text-teal-800"
-              title="Embedded coordination layer designed for Epic, Oracle Health, and Abu Dhabi Malaffi HIE"
+              title="HL7 FHIR R4 integration layer for Epic, Oracle Health, and Abu Dhabi Malaffi HIE"
             >
               <ShieldCheck className="h-3.5 w-3.5" />
-              SMART on FHIR · Malaffi HIE
+              Malaffi HIE · FHIR R4
             </span>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
               <Lock className="h-3.5 w-3.5" />
@@ -1286,68 +1233,47 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
             </div>
           </div>
 
-          {/* Cross-Facility Care Continuity Strip (The EMR Blind Spot) */}
-          <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
-                <Building2 className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
-                Cross-Facility Care Continuity (3 Separate EMRs · 1 Longitudinal Passport)
-              </div>
-              <span className="rounded-full border border-teal-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-teal-800">
-                EMR Silo Gap Bridged via Malaffi HIE
-              </span>
-            </div>
-
-            <ol className="mt-2.5 grid gap-2.5 md:grid-cols-3">
-              {FACILITY_CONTINUITY_STAGES.map((stage) => {
+          {/* Compact Care-Site Provenance Trail */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-slate-100 pt-3.5 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-medium text-slate-400">
+              <Building2 className="h-3.5 w-3.5" aria-hidden="true" />
+              Care Sites:
+            </span>
+            <ol className="flex flex-wrap items-center gap-1.5">
+              {FACILITY_CONTINUITY_STAGES.map((stage, idx) => {
                 const currentFacilityIdx = isPostpartum ? 2 : isAntenatal ? 1 : 0;
                 const isDone = stage.stageIndex < currentFacilityIdx;
                 const isCurrent = stage.stageIndex === currentFacilityIdx;
 
                 return (
-                  <li
-                    key={stage.dayTag}
-                    className={`rounded-lg border p-3 text-xs transition ${
-                      isCurrent
-                        ? "border-teal-400 bg-white shadow-xs ring-1 ring-teal-200/70"
-                        : isDone
-                          ? "border-emerald-200 bg-emerald-50/40 text-slate-700"
-                          : "border-slate-200/80 bg-white/60 text-slate-500"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                        {stage.dayTag} · {stage.stageLabel}
-                      </span>
-                      {isCurrent ? (
-                        <span className="rounded-full bg-teal-600 px-2 py-0.5 text-[10px] font-semibold text-white">
-                          Active
-                        </span>
-                      ) : isDone ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
-                          <Check className="h-2.5 w-2.5" aria-hidden="true" />
-                          Carried Forward
-                        </span>
+                  <li key={stage.dayTag} className="inline-flex items-center gap-1.5">
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
+                        isCurrent
+                          ? "border-teal-300 bg-teal-50 font-medium text-teal-950"
+                          : isDone
+                            ? "border-emerald-200 bg-emerald-50/60 text-emerald-900"
+                            : "border-slate-200 bg-slate-50 text-slate-400"
+                      }`}
+                    >
+                      {isDone ? (
+                        <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" />
                       ) : (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                          Upcoming
-                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={`h-1.5 w-1.5 rounded-full ${
+                            isCurrent ? "bg-teal-600" : "bg-slate-300"
+                          }`}
+                        />
                       )}
-                    </div>
-
-                    <p className="mt-1.5 font-semibold text-slate-900">{stage.facility}</p>
-                    <p className="font-mono text-[10px] text-slate-500">{stage.emrSystem}</p>
-
-                    <div className="mt-2 space-y-1 border-t border-slate-100 pt-2 text-[11px] leading-snug">
-                      <p className="text-slate-500">
-                        <span className="font-semibold text-rose-700">Without layer:</span>{" "}
-                        {stage.siloRisk}
-                      </p>
-                      <p className={isCurrent || isDone ? "text-teal-900" : "text-slate-600"}>
-                        <span className="font-semibold text-teal-700">ReproBridge:</span>{" "}
-                        {stage.bridgedOutcome}
-                      </p>
-                    </div>
+                      <span>{stage.facility}</span>
+                      <span className="font-mono text-[10px] opacity-75">
+                        {stage.emrSystem} · {stage.dayTag}
+                      </span>
+                    </span>
+                    {idx < FACILITY_CONTINUITY_STAGES.length - 1 && (
+                      <ArrowRight className="h-3 w-3 text-slate-300" aria-hidden="true" />
+                    )}
                   </li>
                 );
               })}
@@ -2217,7 +2143,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           {obligations.map((obl) => {
             const fhirRecord = SYNTHETIC_FHIR_RECORDS[obl.id];
             const isFhirOpen = expandedFhirId === obl.id;
-            const slaMeta = getClinicalSlaMeta(obl);
+            const urgentDue = getUrgentDueChip(obl);
             const safetyBlock = safetyBlockFeedback[obl.id];
 
             return (
@@ -2243,6 +2169,12 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                       >
                         {obl.status}
                       </span>
+                      {urgentDue && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 font-mono text-[11px] font-medium text-rose-800">
+                          <Clock className="h-3 w-3" aria-hidden="true" />
+                          {urgentDue}
+                        </span>
+                      )}
                     </div>
                     <h4 className="mt-2 text-base font-semibold text-slate-900">
                       {obl.title}
@@ -2278,17 +2210,6 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                       </button>
                     )
                   )}
-                </div>
-
-                {/* Clinical SLA Window & Escalation Path */}
-                <div
-                  className={`mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${slaMeta.badgeClass}`}
-                >
-                  <span className="inline-flex items-center gap-1.5 font-semibold">
-                    <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    {slaMeta.windowLabel}
-                  </span>
-                  <span className="text-[11px] opacity-90">{slaMeta.escalationNote}</span>
                 </div>
 
                 {safetyBlock && (
@@ -3062,10 +2983,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     Outbound HL7 FHIR R4 Transaction Bundle
                   </h3>
                   <p className="mt-1 text-xs text-slate-600">
-                    Writes 1 <span className="font-mono font-medium">CarePlan</span> +{" "}
-                    {obligations.length} <span className="font-mono font-medium">Task</span>{" "}
-                    resource(s) back into Epic / Oracle Health / Malaffi inside the UAE boundary so
-                    clinicians never rely on a standalone portal.
+                    1 <span className="font-mono font-medium">CarePlan</span> + {obligations.length}{" "}
+                    <span className="font-mono font-medium">Task</span> resource(s) formatted for
+                    Epic, Oracle Health, or Malaffi HIE write-back inside the UAE boundary.
                   </p>
                 </div>
                 <button
