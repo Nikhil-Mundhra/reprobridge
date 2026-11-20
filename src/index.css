@@ -100,6 +100,23 @@ progress.rb-spinner:indeterminate {
   }
 }
 
+/* Trace step card grid with CSS subgrid so headers, descriptions, and footers align across siblings */
+.rb-trace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.75rem;
+}
+
+.rb-trace-card {
+  grid-row: span 3;
+  display: grid;
+  /* Same-cascade fallback when subgrid is unsupported */
+  grid-template-rows: auto 1fr auto;
+  grid-template-rows: subgrid;
+  row-gap: 0.625rem;
+  min-inline-size: 0;
+}
+
 @keyframes rb-spin {
   to {
     rotate: 1turn;
