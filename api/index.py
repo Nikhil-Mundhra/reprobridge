@@ -1,3 +1,6 @@
+import os
+from typing import Any
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -10,12 +13,13 @@ from api.db import (
     reset_obligations,
     update_obligation,
 )
+from api.mcp_server import call_mcp_tool, handle_mcp_jsonrpc, list_mcp_tools
 from api.workflow import transition_workflow
 
 app = FastAPI(
     title="ReproBridge API",
     description="Continuous, Evidence-Verified Reproductive & Preventive Care Coordination",
-    version="0.1.0",
+    version="0.3.0",
 )
 
 app.add_middleware(
@@ -31,11 +35,71 @@ class VerifyClosureRequest(BaseModel):
     closure_evidence: str = Field(..., min_length=4, max_length=1000)
 
 
+def _run_transition(event_type: str) -> dict[str, Any]:
+    current = list_obligations()
+    result = transition_workflow.invoke(
+        {
+            "event_type": event_type,
+            "obligations": current,
+            "reassessed_updates": [],
+            "privacy_report": {},
+            "trace": [],
+            "agent_summary": "",
+            "specialist_handoff": "",
+            "ai_metadata": {},
+        }
+    )
+    for patch in result["reassessed_updates"]:
+        patch_copy = dict(patch)
+        obl_id = patch_copy.pop("id")
+        updated = update_obligation(obl_id, patch_copy)
+        if updated:
+            append_audit_event(
+                event_type="LIFE_STAGE_TRANSITION",
+                actor="Deterministic Rule Engine",
+                summary=(
+                    f"{obl_id} transitioned under {event_type} to "
+                    f"{updated['status']} ({updated['priority']})."
+                ),
+                obligation_id=obl_id,
+            )
+
+    # Record the de-identified AI brief via the governed Neon MCP tool layer.
+    call_mcp_tool(
+        "neon_record_agent_brief",
+        {
+            "summary": (
+                f"De-identified brief generated for {event_type} "
+                f"({result['ai_metadata'].get('mode')}, "
+                f"case {result['privacy_report']['payload']['case_token']}); zero PHI transmitted."
+            ),
+            "model": result["ai_metadata"].get("model", "deterministic"),
+        },
+    )
+
+    return {
+        "event_type": event_type,
+        "agent_summary": result["agent_summary"],
+        "specialist_handoff": result["specialist_handoff"],
+        "ai_metadata": result["ai_metadata"],
+        "privacy_report": result["privacy_report"],
+        "trace": result["trace"],
+        "obligations": list_obligations(),
+        "audit_events": list_audit_events(),
+    }
+
+
 @app.get("/api/health")
 def health():
     return {
         "status": "ok",
         "service": "reprobridge-api",
+        "residency_policy": "UAE_PHI_LOCAL_ONLY",
+        "ai_provider": {
+            "provider": "openrouter",
+            "configured": bool(os.getenv("OPENROUTER_API_KEY", "").strip()),
+            "model": os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
+        },
         "database": check_database_health(),
     }
 
@@ -50,37 +114,28 @@ def get_obligations():
 
 @app.post("/api/transitions/pregnancy")
 def trigger_pregnancy_transition():
-    current = list_obligations()
-    result = transition_workflow.invoke(
-        {
-            "event_type": "FHIR_PREGNANCY_CONFIRMED",
-            "obligations": current,
-            "reassessed_updates": [],
-            "trace": [],
-            "agent_summary": "",
-        }
-    )
-    for patch in result["reassessed_updates"]:
-        obl_id = patch.pop("id")
-        updated = update_obligation(obl_id, patch)
-        if updated:
-            append_audit_event(
-                event_type="LIFE_STAGE_TRANSITION",
-                actor="LangGraph Orchestrator",
-                summary=f"{obl_id} transitioned to {updated['status']} ({updated['priority']}).",
-                obligation_id=obl_id,
-            )
+    return _run_transition("FHIR_PREGNANCY_CONFIRMED")
 
-    return {
-        "agent_summary": result["agent_summary"],
-        "trace": result["trace"],
-        "obligations": list_obligations(),
-        "audit_events": list_audit_events(),
-    }
+
+@app.post("/api/transitions/postpartum")
+def trigger_postpartum_transition():
+    return _run_transition("FHIR_DELIVERY_POSTPARTUM")
 
 
 @app.post("/api/obligations/{obligation_id}/verify")
 def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
+    existing = next((o for o in list_obligations() if o["id"] == obligation_id), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+    if existing["status"] == "DEFERRED_TO_POSTPARTUM":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Clinical safety guard: live-vaccine obligation is contraindicated during "
+                "pregnancy and cannot be closed until the Postpartum transition is triggered."
+            ),
+        )
+
     updated = update_obligation(
         obligation_id,
         {
@@ -89,8 +144,6 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
             "closure_evidence": body.closure_evidence,
         },
     )
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Clinical obligation not found")
     append_audit_event(
         event_type="EVIDENCE_VERIFIED_CLOSURE",
         actor=body.clinician_name,
@@ -101,6 +154,21 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
         "obligation": updated,
         "audit_events": list_audit_events(),
     }
+
+
+@app.get("/api/mcp/tools")
+def get_mcp_tools():
+    """List governed Neon Postgres MCP tools exposed to AI agents."""
+    return {
+        "residency_policy": "UAE_PHI_LOCAL_ONLY",
+        "tools": list_mcp_tools(),
+    }
+
+
+@app.post("/api/mcp")
+def mcp_jsonrpc(payload: dict[str, Any]):
+    """JSON-RPC 2.0 endpoint for governed Neon Postgres MCP tool execution."""
+    return handle_mcp_jsonrpc(payload)
 
 
 @app.post("/api/demo/reset")
