@@ -578,53 +578,101 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         </section>
 
         {/* Patient Header & Life-Stage Transition Actions */}
-        <section className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-              Synthetic Patient Record (Stored in Neon / UAE Boundary)
-            </p>
-            <h2 className="mt-1 text-base font-semibold text-slate-900">
-              {patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)"}{" "}
-              <span className="ml-2 font-mono text-xs font-normal text-slate-500">
-                {patient?.patient_id ?? "PAT-AE-4092"}
-              </span>
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Current Life Stage:{" "}
-              <span className="font-medium text-teal-700">{currentLifeStage}</span>
-            </p>
+        <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                Synthetic Patient Record (Stored in Neon / UAE Boundary)
+              </p>
+              <h2 className="mt-1 text-base font-semibold text-slate-900">
+                {patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)"}{" "}
+                <span className="ml-2 font-mono text-xs font-normal text-slate-500">
+                  {patient?.patient_id ?? "PAT-AE-4092"}
+                </span>
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Current Life Stage:{" "}
+                <span className="font-medium text-teal-700">{currentLifeStage}</span>
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              {!isAntenatal && !isPostpartum && (
+                <button
+                  onClick={() => runTransition("/api/transitions/pregnancy")}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-teal-700 disabled:opacity-50"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  Trigger Pregnancy Transition
+                </button>
+              )}
+              {isAntenatal && (
+                <button
+                  onClick={() => runTransition("/api/transitions/postpartum")}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  <Baby className="h-4 w-4" />
+                  Trigger Postpartum Transition
+                </button>
+              )}
+              <button
+                onClick={handleReset}
+                disabled={loading}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Reset Demo
+              </button>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {!isAntenatal && !isPostpartum && (
-              <button
-                onClick={() => runTransition("/api/transitions/pregnancy")}
-                disabled={loading}
-                className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-teal-700 disabled:opacity-50"
-              >
-                <Sparkles className="h-4 w-4" />
-                Trigger Pregnancy Transition
-              </button>
-            )}
-            {isAntenatal && (
-              <button
-                onClick={() => runTransition("/api/transitions/postpartum")}
-                disabled={loading}
-                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-indigo-700 disabled:opacity-50"
-              >
-                <Baby className="h-4 w-4" />
-                Trigger Postpartum Transition
-              </button>
-            )}
-            <button
-              onClick={handleReset}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          {!isPostpartum && (
+            <div
+              role="note"
+              className={`flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-xs leading-relaxed ${
+                isAntenatal && obligations.some((o) => o.id === "OBL-101" && o.status !== "VERIFIED_CLOSED")
+                  ? "border-amber-200 bg-amber-50/80 text-amber-950"
+                  : "border-slate-200 bg-slate-50 text-slate-700"
+              }`}
             >
-              <RotateCcw className="h-4 w-4" />
-              Reset Demo
-            </button>
-          </div>
+              {isAntenatal && obligations.some((o) => o.id === "OBL-101" && o.status !== "VERIFIED_CLOSED") ? (
+                <>
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                  <p>
+                    <span className="font-semibold text-amber-900">
+                      Before triggering Postpartum:
+                    </span>{" "}
+                    <span className="font-mono font-medium">OBL-101</span> (antenatal TSH follow-up) is still open. You can verify &amp; close it below first, or proceed — Postpartum Transition will carry{" "}
+                    <span className="font-mono">OBL-101</span> forward for 6-week reassessment, reactivate deferred{" "}
+                    <span className="font-mono">OBL-102</span> (MMR) as <span className="font-semibold">URGENT</span>, and call external assistive AI (OpenRouter) with <span className="font-semibold">0 PHI</span> to draft a handoff for clinician sign-off.
+                  </p>
+                </>
+              ) : isAntenatal ? (
+                <>
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
+                  <p>
+                    <span className="font-semibold text-slate-900">
+                      Postpartum Transition Notice:
+                    </span>{" "}
+                    Runs deterministic postpartum rules (lifting the pregnancy live-vaccine contraindication and reactivating{" "}
+                    <span className="font-mono">OBL-102</span> as <span className="font-semibold">URGENT</span>), strips all UAE PHI, and calls OpenRouter solely to draft an assistive OB-GYN handoff pending clinician approval.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                  <p>
+                    <span className="font-semibold text-slate-900">
+                      Hybrid AI &amp; Safety Notice:
+                    </span>{" "}
+                    Triggering a life-stage transition executes deterministic clinical rules in Neon Postgres first, strips all UAE PHI via the Privacy Firewall, and uses external assistive AI (OpenRouter) only to draft a de-identified clinician handoff — never to diagnose, prescribe, or close obligations.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Hybrid LangGraph Orchestrator Summary, Live Streaming, Micro-Interactions & UAE Privacy Firewall */}
