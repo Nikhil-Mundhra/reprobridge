@@ -125,10 +125,16 @@ const TRACE_NODE_META: Record<
   },
 };
 
-function formatExecutionLabel(execution?: string): { label: string; className: string } {
+function formatExecutionLabel(
+  execution?: string,
+  model?: string | null
+): { label: string; className: string } {
   if (execution === "agentic") {
+    const shortModel = model
+      ? model.replace(/:free$/, "").split("/").pop() ?? model
+      : "OpenRouter";
     return {
-      label: "Agentic · Gemma 4",
+      label: `Agentic · ${shortModel}`,
       className: "border-purple-200 bg-purple-50 text-purple-800",
     };
   }
@@ -230,7 +236,7 @@ const INTERIM_TIPS: Record<string, { title: string; body: string }[]> = {
   pregnancy: [
     {
       title: "UAE PHI Privacy Firewall Active",
-      body: "Deterministic clinical rules run first inside the UAE boundary. Patient names, IDs, and raw HIE notes are stripped before Gemma 4 receives an ephemeral case token.",
+      body: "Deterministic clinical rules run first inside the UAE boundary. Patient names, IDs, and raw HIE notes are stripped before OpenRouter receives an ephemeral case token.",
     },
     {
       title: "Clinical Safety Rule · First-Trimester TSH",
@@ -248,7 +254,7 @@ const INTERIM_TIPS: Record<string, { title: string; body: string }[]> = {
     },
     {
       title: "Assistive AI Only · Zero Autonomous Closure",
-      body: "Gemma 4 drafts a de-identified postpartum discharge handoff while Neon Postgres enforces clinician evidence verification before any obligation can close.",
+      body: "OpenRouter drafts a de-identified postpartum discharge handoff while Neon Postgres enforces clinician evidence verification before any obligation can close.",
     },
   ],
 };
@@ -391,7 +397,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           setAuditEvents(payload.audit_events ?? []);
           setPrivacyReport(payload.privacy_report ?? null);
           setTrace(payload.trace ?? []);
-          setStreamingPhase("UAE Firewall verified (0 PHI) · Streaming Gemma 4 synthesis…");
+          setStreamingPhase("UAE Firewall verified (0 PHI) · Streaming OpenRouter synthesis…");
         } else if (eventName === "token") {
           accumulated += payload.delta ?? "";
           setStreamingRawText(accumulated);
@@ -756,7 +762,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 aria-label="Drafting specialist handoff"
               >
                 <p className="font-semibold uppercase tracking-wider text-teal-700">
-                  Draft Specialist Handoff (Streaming from Gemma 4…)
+                  Draft Specialist Handoff (Streaming from OpenRouter…)
                 </p>
                 <div className="mt-2.5 space-y-2">
                   <div className="rb-shimmer h-3 w-11/12 rounded" />
@@ -774,7 +780,10 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     accent: "border-t-teal-500",
                     badge: "bg-teal-100 text-teal-800",
                   };
-                  const exec = formatExecutionLabel(step.execution);
+                  const exec = formatExecutionLabel(
+                    step.execution,
+                    aiMetadata?.model ?? streamingModel
+                  );
 
                   return (
                     <article
