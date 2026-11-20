@@ -1360,8 +1360,8 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                             }
                             className="inline-flex items-center gap-1 text-[10px] font-medium text-teal-700 hover:underline"
                           >
-                            <Lock className="h-2.5 w-2.5 text-emerald-700" aria-hidden="true" />
-                            <span>{isSelected ? "Hide details" : "Inspect"}</span>
+                            <Eye className="h-3 w-3 text-teal-600" aria-hidden="true" />
+                            <span>{isSelected ? "Hide" : "Inspect"}</span>
                           </button>
                         </footer>
                       </article>
@@ -1403,16 +1403,10 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 {/* Step Inspector Drawer */}
                 {selectedTraceNode && (
                   <div className="rounded-xl border border-teal-200 bg-white p-4 text-xs text-slate-700 shadow-xs">
-                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-slate-900">
-                          Step Inspector ·{" "}
-                          {TRACE_NODE_META[selectedTraceNode]?.title ?? selectedTraceNode}
-                        </span>
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
-                          {selectedTraceNode}
-                        </span>
-                      </div>
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                      <span className="font-semibold text-slate-900">
+                        {TRACE_NODE_META[selectedTraceNode]?.title ?? selectedTraceNode}
+                      </span>
                       <button
                         type="button"
                         onClick={() => setSelectedTraceNode(null)}
@@ -1424,84 +1418,77 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     </div>
 
                     {selectedTraceNode === "detect_open_obligations" && (
-                      <div className="mt-3 space-y-2">
-                        <p className="text-slate-500">
-                          Queried Neon Clinical Obligation Passport for unresolved care gaps:
-                        </p>
-                        <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="mt-3 space-y-2.5">
+                        <pre className="overflow-x-auto rounded-lg bg-slate-900 px-3 py-2 font-mono text-[11px] text-teal-300">
+                          {`SELECT id, rule_version, status FROM clinical_obligations WHERE status != 'VERIFIED_CLOSED'; -- ${obligations.filter((o) => o.status !== "VERIFIED_CLOSED").length} open row(s)`}
+                        </pre>
+                        <div className="flex flex-wrap gap-2">
                           {obligations.map((obl) => (
-                            <div
+                            <span
                               key={obl.id}
-                              className="rounded-lg border border-slate-200 bg-slate-50 p-2.5"
+                              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-[11px] text-slate-700"
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-mono font-semibold text-slate-800">
-                                  {obl.id}
-                                </span>
-                                <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600">
-                                  {obl.rule_version}
-                                </span>
-                              </div>
-                              <p className="mt-1 font-medium text-slate-900">{obl.title}</p>
-                              <p className="mt-0.5 text-[11px] text-slate-500">
-                                Owner: {obl.owner} · Stage: {obl.life_stage}
-                              </p>
-                            </div>
+                              <strong className="text-slate-900">{obl.id}</strong>
+                              <span className="text-slate-400">·</span>
+                              <span>{obl.rule_version}</span>
+                              <span className="text-slate-400">·</span>
+                              <span className="text-teal-700">{obl.status}</span>
+                            </span>
                           ))}
                         </div>
                       </div>
                     )}
 
                     {selectedTraceNode === "evaluate_life_stage_transition" && (
-                      <div className="mt-3 space-y-2">
-                        <p className="text-slate-500">
-                          Version-controlled deterministic transitions applied (zero LLM involvement):
-                        </p>
-                        <div className="space-y-2">
-                          {obligations.map((obl) => (
-                            <div
-                              key={obl.id}
-                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
-                            >
-                              <div>
-                                <span className="font-mono font-semibold text-slate-800">
+                      <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                        <table className="w-full text-left text-[11px]">
+                          <thead className="bg-slate-50 text-slate-500">
+                            <tr>
+                              <th className="px-3 py-1.5 font-semibold">Obligation</th>
+                              <th className="px-3 py-1.5 font-semibold">Rule Version</th>
+                              <th className="px-3 py-1.5 font-semibold">Assigned Owner</th>
+                              <th className="px-3 py-1.5 font-semibold">Outcome</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {obligations.map((obl) => (
+                              <tr key={obl.id}>
+                                <td className="px-3 py-1.5 font-mono font-semibold text-slate-900">
                                   {obl.id}
-                                </span>{" "}
-                                <span className="text-slate-500">({obl.rule_version})</span>
-                                <p className="mt-0.5 text-[11px] text-slate-600">{obl.owner}</p>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                <span
-                                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
-                                    PRIORITY_STYLES[obl.priority] ?? "bg-slate-100 text-slate-700"
-                                  }`}
-                                >
-                                  {obl.priority}
-                                </span>
-                                <span
-                                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                    STATUS_STYLES[obl.status] ?? "bg-slate-100 text-slate-700"
-                                  }`}
-                                >
-                                  {obl.status}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                                </td>
+                                <td className="px-3 py-1.5 font-mono text-slate-600">
+                                  {obl.rule_version}
+                                </td>
+                                <td className="px-3 py-1.5 text-slate-700">{obl.owner}</td>
+                                <td className="px-3 py-1.5">
+                                  <span
+                                    className={`mr-1.5 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                      PRIORITY_STYLES[obl.priority] ?? "bg-slate-100 text-slate-700"
+                                    }`}
+                                  >
+                                    {obl.priority}
+                                  </span>
+                                  <span
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                      STATUS_STYLES[obl.status] ?? "bg-slate-100 text-slate-700"
+                                    }`}
+                                  >
+                                    {obl.status}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     )}
 
                     {selectedTraceNode === "apply_uae_privacy_firewall" && privacyReport && (
-                      <div className="mt-3 space-y-2">
-                        <p className="text-slate-500">
-                          Pseudonymized case as{" "}
-                          <span className="font-mono font-semibold text-indigo-800">
-                            {String(privacyReport.payload.case_token ?? "ANON-CASE")}
-                          </span>{" "}
-                          and verified <span className="font-semibold text-emerald-700">0 PHI</span>{" "}
-                          in outbound payload.
-                        </p>
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-mono text-[11px] text-indigo-800">
+                          case_token: <strong>{String(privacyReport.payload.case_token ?? "ANON-CASE")}</strong> ·{" "}
+                          {privacyReport.redacted_fields.length} PHI fields stripped · assert_phi_free() passed
+                        </span>
                         <button
                           type="button"
                           onClick={() => {
@@ -1511,30 +1498,20 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                           className="inline-flex items-center gap-1.5 rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-800 hover:bg-indigo-100"
                         >
                           <Eye className="h-3 w-3" aria-hidden="true" />
-                          Open Before / After PHI Redaction Diff Below
+                          View Redaction Diff Below
                         </button>
                       </div>
                     )}
 
                     {selectedTraceNode === "synthesize_coordination_brief" && (
                       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                        <div className="space-y-1">
-                          <p>
-                            <span className="font-medium text-slate-900">Provider / Model:</span>{" "}
-                            <span className="font-mono text-purple-800">
-                              {aiMetadata
-                                ? `${aiMetadata.provider} · ${aiMetadata.model}`
-                                : "openrouter"}
-                            </span>
-                          </p>
-                          <p className="text-[11px] text-slate-500">
-                            {streamTokenCount > 0
-                              ? `Streamed ${streamTokenCount} token chunks`
-                              : "Synthesized via fallback"}
-                            {streamDurationMs !== null ? ` in ${(streamDurationMs / 1000).toFixed(1)}s` : ""}
-                            {" · "}Zero PHI transmitted · Clinician approval required.
-                          </p>
-                        </div>
+                        <p className="font-mono text-[11px] text-slate-600">
+                          {aiMetadata
+                            ? `${aiMetadata.provider} · ${aiMetadata.model}`
+                            : "openrouter"}
+                          {streamTokenCount > 0 ? ` · ${streamTokenCount} chunks` : ""}
+                          {streamDurationMs !== null ? ` · ${(streamDurationMs / 1000).toFixed(1)}s` : ""}
+                        </p>
                         <button
                           type="button"
                           onClick={() => {
