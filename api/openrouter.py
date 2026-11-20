@@ -122,7 +122,8 @@ def synthesize_deidentified_brief(
         "model": primary_model,
         "models": fallback_chain,
         "temperature": 0.2,
-        "max_tokens": 350,
+        "max_tokens": 500,
+        "reasoning": {"effort": "none"},
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -194,7 +195,8 @@ def stream_deidentified_brief(
         "model": primary_model,
         "models": fallback_chain,
         "temperature": 0.2,
-        "max_tokens": 400,
+        "max_tokens": 500,
+        "reasoning": {"effort": "none"},
         "stream": True,
         "messages": [
             {"role": "system", "content": STREAM_SYSTEM_PROMPT},
