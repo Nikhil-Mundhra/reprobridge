@@ -113,7 +113,37 @@ def test_full_six_step_functional_flow(monkeypatch):
     assert "event: deterministic_complete" in body
     assert "event: complete" in body
 
-    # 10. Reset restores initial state
+    # 10. Evidence endpoint serves seeded FHIR evidence records from DB
+    ev_resp = client.get("/api/obligations/OBL-101/evidence")
+    assert ev_resp.status_code == 200
+    ev_list = ev_resp.json()["evidence"]
+    assert len(ev_list) >= 1
+    assert ev_list[0]["id"] == "EVD-TSH-2026-10"
+
+    # 11. Manual / Table import ingests new obligations + linked evidence
+    imp_resp = client.post(
+        "/api/obligations/import",
+        json={
+            "source_label": "CSV / Table Import",
+            "obligations": [
+                {
+                    "title": "Gestational Diabetes OGTT Follow-up",
+                    "rationale": "Elevated 1-hour glucose challenge; requires 3-hour OGTT.",
+                    "priority": "HIGH",
+                    "life_stage": "Antenatal (Trimester 1)",
+                    "incoming_evidence_result": "3-hour OGTT normal",
+                }
+            ],
+        },
+    )
+    assert imp_resp.status_code == 200
+    assert imp_resp.json()["imported_count"] == 1
+    assert any(o["id"] == "OBL-103" for o in imp_resp.json()["obligations"])
+    ev_103 = client.get("/api/obligations/OBL-103/evidence")
+    assert ev_103.status_code == 200
+    assert len(ev_103.json()["evidence"]) == 1
+
+    # 12. Reset restores initial state
     final_reset = client.post("/api/demo/reset")
     assert final_reset.status_code == 200
     assert all(o["status"] == "OPEN" for o in final_reset.json()["obligations"])

@@ -55,6 +55,22 @@ audit_events_table = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+clinical_evidence_table = Table(
+    "clinical_evidence",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column("obligation_id", String(64), nullable=False),
+    Column("fhir_resource_type", String(64), nullable=False),
+    Column("code_display", String(256), nullable=False),
+    Column("result_value", String(256), nullable=False),
+    Column("reference_range", String(128), nullable=True),
+    Column("source_facility", String(256), nullable=False),
+    Column("accession_id", String(128), nullable=False),
+    Column("clinician_suggestion", String(128), nullable=False),
+    Column("summary_note", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+)
+
 
 def _normalize_database_url(raw_url: str) -> str:
     """Ensure SQLAlchemy uses the psycopg v3 driver for Neon PostgreSQL."""
@@ -151,12 +167,48 @@ SEED_AUDIT_EVENTS: list[dict[str, Any]] = [
     },
 ]
 
+SEED_CLINICAL_EVIDENCE: list[dict[str, Any]] = [
+    {
+        "id": "EVD-TSH-2026-10",
+        "obligation_id": "OBL-101",
+        "fhir_resource_type": "Observation",
+        "code_display": "Thyrotropin (TSH) [LOINC 3016-3] + Free T4",
+        "result_value": "TSH 2.1 mIU/L (Normalized) · Levothyroxine 50 mcg initiated",
+        "reference_range": "Trimester 1 target <2.5 mIU/L",
+        "source_facility": "Cleveland Clinic Abu Dhabi · Malaffi HIE",
+        "accession_id": "MAL-LAB-2026-88412",
+        "clinician_suggestion": "Dr. Layla Al-Hashimi (OB-GYN)",
+        "summary_note": (
+            "Repeat TSH 2.1 mIU/L verified (Accession #MAL-LAB-2026-88412, within Trimester 1 "
+            "target <2.5 mIU/L); levothyroxine 50 mcg initiated and documented in Malaffi HIE."
+        ),
+    },
+    {
+        "id": "EVD-MMR-2026-11",
+        "obligation_id": "OBL-102",
+        "fhir_resource_type": "Immunization",
+        "code_display": "MMR (Measles, Mumps, Rubella) Vaccine [CVX 03]",
+        "result_value": "0.5 mL SC administered pre-discharge (Lot #MMR-2026-AE)",
+        "reference_range": "Postpartum contraindication lifted",
+        "source_facility": "Corniche Hospital Abu Dhabi · Malaffi Immunization Registry",
+        "accession_id": "MAL-IMM-2026-55901",
+        "clinician_suggestion": "Dr. Mariam Al-Suwaidi (Postpartum OB-GYN)",
+        "summary_note": (
+            "Postpartum MMR vaccine administered prior to discharge (Lot #MMR-2026-AE, "
+            "Registry #MAL-IMM-2026-55901); recorded in Malaffi Immunization Registry."
+        ),
+    },
+]
+
 _MEMORY_STORE: list[dict[str, Any]] = [
     {**item, "updated_at": datetime.now(timezone.utc)} for item in SEED_OBLIGATIONS
 ]
 _MEMORY_AUDIT: list[dict[str, Any]] = [
     {"id": idx + 1, **item, "created_at": datetime.now(timezone.utc)}
     for idx, item in enumerate(SEED_AUDIT_EVENTS)
+]
+_MEMORY_EVIDENCE: list[dict[str, Any]] = [
+    {**item, "recorded_at": datetime.now(timezone.utc)} for item in SEED_CLINICAL_EVIDENCE
 ]
 
 
@@ -169,10 +221,10 @@ def ensure_schema_and_seed() -> None:
     if direct_engine is None:
         return
     metadata.create_all(direct_engine)
+    now = datetime.now(timezone.utc)
     with direct_engine.begin() as conn:
         existing = conn.execute(select(obligations_table.c.id).limit(1)).first()
         if existing is None:
-            now = datetime.now(timezone.utc)
             conn.execute(
                 obligations_table.insert(),
                 [{**item, "updated_at": now} for item in SEED_OBLIGATIONS],
@@ -180,6 +232,12 @@ def ensure_schema_and_seed() -> None:
             conn.execute(
                 audit_events_table.insert(),
                 [{**item, "created_at": now} for item in SEED_AUDIT_EVENTS],
+            )
+        existing_ev = conn.execute(select(clinical_evidence_table.c.id).limit(1)).first()
+        if existing_ev is None:
+            conn.execute(
+                clinical_evidence_table.insert(),
+                [{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE],
             )
     _schema_initialized = True
 
@@ -283,6 +341,88 @@ def update_obligation(obligation_id: str, updates: dict[str, Any]) -> dict[str, 
         return dict(row) if row else None
 
 
+def list_evidence_for_obligation(obligation_id: str) -> list[dict[str, Any]]:
+    """Fetch incoming HIE / FHIR clinical evidence records for an obligation."""
+    engine = get_engine()
+    if engine is None:
+        return [
+            dict(item)
+            for item in reversed(_MEMORY_EVIDENCE)
+            if item["obligation_id"] == obligation_id
+        ]
+    ensure_schema_and_seed()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(clinical_evidence_table)
+            .where(clinical_evidence_table.c.obligation_id == obligation_id)
+            .order_by(clinical_evidence_table.c.recorded_at.desc())
+        ).mappings()
+        return [dict(row) for row in rows]
+
+
+def create_obligation(item: dict[str, Any]) -> dict[str, Any]:
+    """Insert a new clinical obligation (manual entry or CSV/table import)."""
+    now = datetime.now(timezone.utc)
+    record = {
+        "id": item["id"],
+        "patient_id": item.get("patient_id") or "PAT-AE-4092",
+        "patient_name": item.get("patient_name") or "Amina Al-Mansoori (Synthetic)",
+        "life_stage": item.get("life_stage") or "Preconception",
+        "title": item["title"],
+        "rationale": item["rationale"],
+        "evidence_source": item.get("evidence_source") or "Manual Clinician Intake",
+        "rule_version": item.get("rule_version") or "RB-CUSTOM-v1.0.0",
+        "owner": item.get("owner") or "OB-GYN / Primary Care",
+        "status": item.get("status") or "OPEN",
+        "priority": (item.get("priority") or "MEDIUM").upper(),
+        "verified_by": None,
+        "closure_evidence": None,
+        "updated_at": now,
+    }
+    engine = get_engine()
+    if engine is None:
+        _MEMORY_STORE[:] = [o for o in _MEMORY_STORE if o["id"] != record["id"]]
+        _MEMORY_STORE.append(record)
+        return dict(record)
+    ensure_schema_and_seed()
+    with engine.begin() as conn:
+        conn.execute(
+            obligations_table.delete().where(obligations_table.c.id == record["id"])
+        )
+        conn.execute(obligations_table.insert().values(**record))
+    return dict(record)
+
+
+def create_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
+    """Insert a new incoming clinical evidence record into Neon Postgres."""
+    now = datetime.now(timezone.utc)
+    record = {
+        "id": item["id"],
+        "obligation_id": item["obligation_id"],
+        "fhir_resource_type": item.get("fhir_resource_type") or "Observation",
+        "code_display": item["code_display"],
+        "result_value": item["result_value"],
+        "reference_range": item.get("reference_range"),
+        "source_facility": item.get("source_facility") or "Malaffi HIE / Imported Table",
+        "accession_id": item.get("accession_id") or f"IMP-{int(now.timestamp())}",
+        "clinician_suggestion": item.get("clinician_suggestion") or "Dr. Layla Al-Hashimi (OB-GYN)",
+        "summary_note": item["summary_note"],
+        "recorded_at": now,
+    }
+    engine = get_engine()
+    if engine is None:
+        _MEMORY_EVIDENCE[:] = [e for e in _MEMORY_EVIDENCE if e["id"] != record["id"]]
+        _MEMORY_EVIDENCE.append(record)
+        return dict(record)
+    ensure_schema_and_seed()
+    with engine.begin() as conn:
+        conn.execute(
+            clinical_evidence_table.delete().where(clinical_evidence_table.c.id == record["id"])
+        )
+        conn.execute(clinical_evidence_table.insert().values(**record))
+    return dict(record)
+
+
 def reset_obligations() -> dict[str, Any]:
     """Reset synthetic demo data back to initial preconception state."""
     now = datetime.now(timezone.utc)
@@ -297,6 +437,8 @@ def reset_obligations() -> dict[str, Any]:
                 for idx, item in enumerate(SEED_AUDIT_EVENTS)
             ]
         )
+        _MEMORY_EVIDENCE.clear()
+        _MEMORY_EVIDENCE.extend([{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE])
         return {
             "obligations": [dict(item) for item in _MEMORY_STORE],
             "audit_events": list_audit_events(),
@@ -305,6 +447,7 @@ def reset_obligations() -> dict[str, Any]:
     with engine.begin() as conn:
         conn.execute(obligations_table.delete())
         conn.execute(audit_events_table.delete())
+        conn.execute(clinical_evidence_table.delete())
         conn.execute(
             obligations_table.insert(),
             [{**item, "updated_at": now} for item in SEED_OBLIGATIONS],
@@ -312,6 +455,10 @@ def reset_obligations() -> dict[str, Any]:
         conn.execute(
             audit_events_table.insert(),
             [{**item, "created_at": now} for item in SEED_AUDIT_EVENTS],
+        )
+        conn.execute(
+            clinical_evidence_table.insert(),
+            [{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE],
         )
     return {
         "obligations": list_obligations(),

@@ -18,10 +18,12 @@ import {
   Pause,
   Pencil,
   Play,
+  Plus,
   RefreshCw,
   RotateCcw,
   ShieldAlert,
   Sparkles,
+  Upload,
   X,
 } from "lucide-react";
 
@@ -69,6 +71,91 @@ interface AiMetadata {
   provider: string;
   model: string;
   fallback_reason: string | null;
+}
+
+interface ClinicalEvidence {
+  id: string;
+  obligation_id: string;
+  fhir_resource_type: string;
+  code_display: string;
+  result_value: string;
+  reference_range: string | null;
+  source_facility: string;
+  accession_id: string;
+  clinician_suggestion: string;
+  summary_note: string;
+  recorded_at: string;
+}
+
+interface ParsedImportRow {
+  title: string;
+  rationale: string;
+  priority: string;
+  life_stage: string;
+  owner: string;
+  evidence_source: string;
+  incoming_evidence_result?: string;
+}
+
+const SAMPLE_IMPORT_CSV = `title,rationale,priority,life_stage,owner,evidence_source,incoming_evidence_result
+Gestational Diabetes OGTT Follow-up,Elevated 1-hour glucose challenge (152 mg/dL); requires 3-hour 100g OGTT confirmation.,HIGH,Antenatal (Trimester 1),OB-GYN / Endocrinology,FHIR Observation/obs-ogtt-2026-10,3-hour OGTT normal across all 4 draws (fasting 84 mg/dL)
+Iron Deficiency Anemia Ferritin Check,Preconception ferritin 11 ng/mL; requires oral iron supplementation and 6-week repeat CBC.,MEDIUM,Preconception,Primary Care / OB-GYN,FHIR Observation/obs-ferritin-2026-09,Repeat ferritin 38 ng/mL & Hb 12.6 g/dL after iron therapy`;
+
+function parseDelimitedTable(raw: string): ParsedImportRow[] {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return [];
+  const delimiter = lines[0].includes("\t") ? "\t" : ",";
+  const splitLine = (line: string): string[] => {
+    if (delimiter === "\t") return line.split("\t").map((c) => c.trim());
+    const out: string[] = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur.trim());
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur.trim());
+    return out;
+  };
+
+  const headers = splitLine(lines[0]).map((h) =>
+    h.toLowerCase().replace(/[^a-z0-9]+/g, "_")
+  );
+  const rows: ParsedImportRow[] = [];
+  for (const line of lines.slice(1)) {
+    const cells = splitLine(line);
+    const get = (...keys: string[]) => {
+      for (const k of keys) {
+        const idx = headers.indexOf(k);
+        if (idx !== -1 && cells[idx]) return cells[idx];
+      }
+      return "";
+    };
+    const title = get("title", "obligation", "finding", "care_gap");
+    const rationale = get("rationale", "description", "notes", "clinical_rationale");
+    if (!title || !rationale) continue;
+    rows.push({
+      title,
+      rationale,
+      priority: (get("priority", "severity") || "MEDIUM").toUpperCase(),
+      life_stage: get("life_stage", "stage") || "Preconception",
+      owner: get("owner", "specialty") || "OB-GYN / Primary Care",
+      evidence_source: get("evidence_source", "source", "fhir_source") || "CSV Table Import",
+      incoming_evidence_result:
+        get("incoming_evidence_result", "evidence_result", "lab_result", "result") || undefined,
+    });
+  }
+  return rows;
 }
 
 interface HealthResponse {
@@ -145,19 +232,6 @@ function formatExecutionLabel(execution?: string): { label: string; className: s
     className: "border-slate-200 bg-slate-100 text-slate-700",
   };
 }
-
-const DEFAULT_CLOSURE_EVIDENCE: Record<string, { clinician: string; evidence: string }> = {
-  "OBL-101": {
-    clinician: "Dr. Layla Al-Hashimi (OB-GYN)",
-    evidence:
-      "Repeat TSH 2.1 mIU/L verified; levothyroxine 50mcg initiated and documented in Malaffi HIE.",
-  },
-  "OBL-102": {
-    clinician: "Dr. Mariam Al-Suwaidi (Postpartum OB-GYN)",
-    evidence:
-      "Postpartum MMR vaccine administered prior to discharge (Lot #MMR-2026-AE); recorded in Malaffi Immunization Registry.",
-  },
-};
 
 const SYNTHETIC_FHIR_RECORDS: Record<string, Record<string, unknown>> = {
   "OBL-101": {
@@ -328,8 +402,27 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [error, setError] = useState<string | null>(null);
 
   const [verifyTarget, setVerifyTarget] = useState<Obligation | null>(null);
+  const [verifyEvidenceList, setVerifyEvidenceList] = useState<ClinicalEvidence[]>([]);
+  const [verifyEvidenceLoading, setVerifyEvidenceLoading] = useState(false);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
   const [clinicianName, setClinicianName] = useState("Dr. Layla Al-Hashimi (OB-GYN)");
   const [closureEvidence, setClosureEvidence] = useState("");
+  const [showAddEvidenceForm, setShowAddEvidenceForm] = useState(false);
+  const [newEvDisplay, setNewEvDisplay] = useState("");
+  const [newEvValue, setNewEvValue] = useState("");
+  const [newEvFacility, setNewEvFacility] = useState("Malaffi HIE · Manual Entry");
+
+  const [showIntakeModal, setShowIntakeModal] = useState(false);
+  const [intakeTab, setIntakeTab] = useState<"manual" | "table">("manual");
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualRationale, setManualRationale] = useState("");
+  const [manualPriority, setManualPriority] = useState("HIGH");
+  const [manualLifeStage, setManualLifeStage] = useState("Preconception");
+  const [manualOwner, setManualOwner] = useState("OB-GYN / Primary Care");
+  const [manualSource, setManualSource] = useState("Manual Clinician Intake");
+  const [manualIncomingResult, setManualIncomingResult] = useState("");
+  const [tableRawText, setTableRawText] = useState(SAMPLE_IMPORT_CSV);
+  const [intakeSubmitting, setIntakeSubmitting] = useState(false);
 
   async function loadData() {
     try {
@@ -366,14 +459,141 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     return () => window.clearInterval(timer);
   }, [isStreaming, tipsPaused, activeTransitionKind]);
 
-  function openVerifyModal(obl: Obligation) {
-    const preset = DEFAULT_CLOSURE_EVIDENCE[obl.id] ?? {
-      clinician: "Dr. Layla Al-Hashimi (OB-GYN)",
-      evidence: "Clinical follow-up completed and verified in Malaffi HIE.",
-    };
-    setClinicianName(preset.clinician);
-    setClosureEvidence(preset.evidence);
+  async function openVerifyModal(obl: Obligation) {
     setVerifyTarget(obl);
+    setVerifyEvidenceList([]);
+    setSelectedEvidenceId(null);
+    setShowAddEvidenceForm(false);
+    setNewEvDisplay(obl.title);
+    setNewEvValue("");
+    setClinicianName("Dr. Layla Al-Hashimi (OB-GYN)");
+    setClosureEvidence("");
+    setVerifyEvidenceLoading(true);
+    try {
+      const res = await fetch(`/api/obligations/${obl.id}/evidence`);
+      if (res.ok) {
+        const data = await res.json();
+        const records: ClinicalEvidence[] = data.evidence ?? [];
+        setVerifyEvidenceList(records);
+        if (records.length > 0) {
+          const latest = records[0];
+          setSelectedEvidenceId(latest.id);
+          setClinicianName(latest.clinician_suggestion || "Dr. Layla Al-Hashimi (OB-GYN)");
+          setClosureEvidence(latest.summary_note);
+        }
+      }
+    } finally {
+      setVerifyEvidenceLoading(false);
+    }
+  }
+
+  async function handleAttachNewEvidence(e: React.FormEvent) {
+    e.preventDefault();
+    if (!verifyTarget || !newEvDisplay.trim() || !newEvValue.trim()) return;
+    setVerifyEvidenceLoading(true);
+    try {
+      const res = await fetch(`/api/obligations/${verifyTarget.id}/evidence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fhir_resource_type: "Observation",
+          code_display: newEvDisplay.trim(),
+          result_value: newEvValue.trim(),
+          source_facility: newEvFacility.trim() || "Malaffi HIE · Manual Entry",
+          clinician_suggestion: clinicianName,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const records: ClinicalEvidence[] = data.evidence ?? [];
+        setVerifyEvidenceList(records);
+        if (data.record) {
+          setSelectedEvidenceId(data.record.id);
+          setClosureEvidence(data.record.summary_note);
+        }
+        if (data.audit_events) setAuditEvents(data.audit_events);
+        setShowAddEvidenceForm(false);
+        setNewEvValue("");
+      }
+    } finally {
+      setVerifyEvidenceLoading(false);
+    }
+  }
+
+  async function handleManualIntakeSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!manualTitle.trim() || !manualRationale.trim()) return;
+    setIntakeSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/obligations/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_label: "Manual Clinician Intake",
+          obligations: [
+            {
+              title: manualTitle.trim(),
+              rationale: manualRationale.trim(),
+              priority: manualPriority,
+              life_stage: manualLifeStage,
+              owner: manualOwner.trim() || "OB-GYN / Primary Care",
+              evidence_source: manualSource.trim() || "Manual Clinician Intake",
+              incoming_evidence_result: manualIncomingResult.trim() || null,
+              incoming_evidence_facility: "Malaffi HIE · Manual Intake",
+            },
+          ],
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Import failed (HTTP ${res.status})`);
+      }
+      const data = await res.json();
+      setObligations(data.obligations ?? []);
+      setAuditEvents(data.audit_events ?? []);
+      setManualTitle("");
+      setManualRationale("");
+      setManualIncomingResult("");
+      setShowIntakeModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Manual intake failed");
+    } finally {
+      setIntakeSubmitting(false);
+    }
+  }
+
+  async function handleTableImportSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const parsed = parseDelimitedTable(tableRawText);
+    if (parsed.length === 0) {
+      setError("No valid rows found. Include header columns 'title' and 'rationale'.");
+      return;
+    }
+    setIntakeSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/obligations/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_label: "CSV / Table Import",
+          obligations: parsed,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Table import failed (HTTP ${res.status})`);
+      }
+      const data = await res.json();
+      setObligations(data.obligations ?? []);
+      setAuditEvents(data.audit_events ?? []);
+      setShowIntakeModal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Table import failed");
+    } finally {
+      setIntakeSubmitting(false);
+    }
   }
 
   useEffect(() => {
@@ -514,6 +734,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         body: JSON.stringify({
           clinician_name: clinicianName,
           closure_evidence: closureEvidence,
+          evidence_id: selectedEvidenceId,
         }),
       });
       if (!res.ok) {
@@ -1457,11 +1678,24 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
         {/* Clinical Obligation Passport */}
         <section className="space-y-4">
-          <div className="flex items-center gap-2">
-            <GitBranch className="h-4 w-4 text-slate-400" />
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
-              Clinical Obligation Passport ({obligations.length})
-            </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <GitBranch className="h-4 w-4 text-slate-400" />
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
+                Clinical Obligation Passport ({obligations.length})
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setIntakeTab("manual");
+                setShowIntakeModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-800 shadow-xs transition hover:bg-teal-50"
+            >
+              <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+              Import Table / Add Finding
+            </button>
           </div>
 
           {initialLoading && obligations.length === 0 && (
@@ -1617,7 +1851,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         </section>
       </main>
 
-      {/* Human-in-the-Loop Clinician Verification Modal */}
+      {/* Human-in-the-Loop Clinician Verification Modal (Backed by Neon clinical_evidence) */}
       {verifyTarget && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
@@ -1625,11 +1859,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           aria-modal="true"
           aria-labelledby="verify-modal-title"
         >
-          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+          <div className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
-                  Evidence-Verified Care Closure
+                  Evidence-Verified Care Closure · Neon Postgres HIE
                 </p>
                 <h3
                   id="verify-modal-title"
@@ -1639,12 +1873,134 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setVerifyTarget(null)}
                 className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
                 aria-label="Close modal"
               >
                 <X className="h-4 w-4" />
               </button>
+            </div>
+
+            {/* Incoming Evidence pulled live from Neon clinical_evidence */}
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                  <Database className="h-3.5 w-3.5 text-teal-600" aria-hidden="true" />
+                  Incoming FHIR Evidence in Neon ({verifyEvidenceList.length})
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowAddEvidenceForm((prev) => !prev)}
+                  className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  <Plus className="h-3 w-3" aria-hidden="true" />
+                  {showAddEvidenceForm ? "Cancel" : "Log New Lab / Result"}
+                </button>
+              </div>
+
+              {verifyEvidenceLoading ? (
+                <div className="mt-2.5 space-y-2" aria-label="Loading evidence from Neon Postgres">
+                  <div className="rb-shimmer h-3.5 w-3/4 rounded" />
+                  <div className="rb-shimmer h-3 w-full rounded" />
+                </div>
+              ) : verifyEvidenceList.length > 0 ? (
+                <ul className="mt-2.5 space-y-2">
+                  {verifyEvidenceList.map((ev) => {
+                    const isPicked = selectedEvidenceId === ev.id;
+                    return (
+                      <li
+                        key={ev.id}
+                        className={`rounded-lg border p-2.5 text-xs transition ${
+                          isPicked
+                            ? "border-emerald-300 bg-emerald-50/70"
+                            : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="rounded bg-teal-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-teal-900">
+                                {ev.fhir_resource_type}
+                              </span>
+                              <span className="font-mono text-[10px] text-slate-500">
+                                {ev.id} · #{ev.accession_id}
+                              </span>
+                            </div>
+                            <p className="mt-1 font-semibold text-slate-900">{ev.result_value}</p>
+                            <p className="mt-0.5 text-[11px] text-slate-600">
+                              {ev.code_display} · {ev.source_facility}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedEvidenceId(ev.id);
+                              setClinicianName(ev.clinician_suggestion || clinicianName);
+                              setClosureEvidence(ev.summary_note);
+                            }}
+                            className={`shrink-0 rounded px-2 py-1 text-[11px] font-medium ${
+                              isPicked
+                                ? "bg-emerald-600 text-white"
+                                : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                            }`}
+                          >
+                            {isPicked ? "Attached" : "Attach Evidence"}
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">
+                  No incoming lab or immunization record found in Neon for {verifyTarget.id} yet.
+                  Log a new result above or enter clinician verification notes below.
+                </p>
+              )}
+
+              {showAddEvidenceForm && (
+                <form
+                  onSubmit={handleAttachNewEvidence}
+                  className="mt-3 space-y-2 rounded-lg border border-teal-200 bg-white p-3 text-xs"
+                >
+                  <p className="font-semibold text-teal-900">
+                    Record New Incoming Clinical Evidence in Neon
+                  </p>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Test / Procedure (e.g., Repeat TSH + Free T4)"
+                    value={newEvDisplay}
+                    onChange={(e) => setNewEvDisplay(e.target.value)}
+                    className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-xs focus:border-teal-500 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    required
+                    placeholder="Result Value (e.g., TSH 2.0 mIU/L · Normal)"
+                    value={newEvValue}
+                    onChange={(e) => setNewEvValue(e.target.value)}
+                    className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-xs focus:border-teal-500 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Source Facility / Registry"
+                    value={newEvFacility}
+                    onChange={(e) => setNewEvFacility(e.target.value)}
+                    className="w-full rounded border border-slate-300 px-2.5 py-1.5 text-xs focus:border-teal-500 focus:outline-none"
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={verifyEvidenceLoading}
+                      className="rounded bg-teal-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+                    >
+                      Save & Attach to Closure
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
 
             <form onSubmit={handleConfirmVerify} className="mt-4 space-y-4">
@@ -1668,6 +2024,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 <textarea
                   rows={3}
                   required
+                  placeholder="Select an incoming Neon HIE record above or enter verified clinical closure evidence…"
                   value={closureEvidence}
                   onChange={(e) => setClosureEvidence(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
@@ -1692,6 +2049,274 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Data Input & CSV/TSV Table Import Modal */}
+      {showIntakeModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="intake-modal-title"
+        >
+          <div className="max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-teal-700">
+                  Neon Postgres Clinical Intake
+                </p>
+                <h3
+                  id="intake-modal-title"
+                  className="mt-1 text-base font-semibold text-slate-900"
+                >
+                  Import Clinical Table or Input Finding Manually
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowIntakeModal(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                aria-label="Close intake modal"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div
+              role="tablist"
+              aria-label="Clinical data intake mode"
+              className="mt-4 inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 text-xs"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={intakeTab === "manual"}
+                onClick={() => setIntakeTab("manual")}
+                className={`rounded-md px-3 py-1.5 font-medium transition ${
+                  intakeTab === "manual"
+                    ? "bg-white text-teal-800 shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Manual Entry
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={intakeTab === "table"}
+                onClick={() => setIntakeTab("table")}
+                className={`rounded-md px-3 py-1.5 font-medium transition ${
+                  intakeTab === "table"
+                    ? "bg-white text-teal-800 shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                Import CSV / Spreadsheet Table
+              </button>
+            </div>
+
+            {intakeTab === "manual" ? (
+              <form onSubmit={handleManualIntakeSubmit} className="mt-4 space-y-3.5 text-sm">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700">
+                    Clinical Obligation Title *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g., Gestational Diabetes 3-Hour OGTT Confirmation"
+                    value={manualTitle}
+                    onChange={(e) => setManualTitle(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700">
+                    Clinical Rationale *
+                  </label>
+                  <textarea
+                    rows={2}
+                    required
+                    placeholder="Why this care gap must be tracked across life stages…"
+                    value={manualRationale}
+                    onChange={(e) => setManualRationale(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">Priority</label>
+                    <select
+                      value={manualPriority}
+                      onChange={(e) => setManualPriority(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+                    >
+                      <option value="URGENT">URGENT</option>
+                      <option value="HIGH">HIGH</option>
+                      <option value="MEDIUM">MEDIUM</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">Life Stage</label>
+                    <select
+                      value={manualLifeStage}
+                      onChange={(e) => setManualLifeStage(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+                    >
+                      <option value="Preconception">Preconception</option>
+                      <option value="Antenatal (Trimester 1)">Antenatal (Trimester 1)</option>
+                      <option value="Postpartum">Postpartum</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">Owner</label>
+                    <input
+                      type="text"
+                      value={manualOwner}
+                      onChange={(e) => setManualOwner(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">
+                      FHIR / HIE Source
+                    </label>
+                    <input
+                      type="text"
+                      value={manualSource}
+                      onChange={(e) => setManualSource(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">
+                      Optional Incoming Verification Result
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g., Repeat ferritin 38 ng/mL (Normal)"
+                      value={manualIncomingResult}
+                      onChange={(e) => setManualIncomingResult(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowIntakeModal(false)}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={intakeSubmitting}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Save to Neon Postgres
+                  </button>
+                </div>
+              </form>
+            ) : (
+              (() => {
+                const previewRows = parseDelimitedTable(tableRawText);
+                return (
+                  <form onSubmit={handleTableImportSubmit} className="mt-4 space-y-3.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-slate-600">
+                        Upload a <span className="font-mono">.csv</span> /{" "}
+                        <span className="font-mono">.tsv</span> file or paste spreadsheet rows
+                        below (columns: <span className="font-mono">title, rationale, priority, life_stage, owner, evidence_source, incoming_evidence_result</span>).
+                      </p>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 font-medium text-teal-800 hover:bg-teal-100">
+                        <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                        Choose CSV File
+                        <input
+                          type="file"
+                          accept=".csv,.tsv,.txt"
+                          className="sr-only"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const text = await file.text();
+                            setTableRawText(text);
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    <textarea
+                      rows={5}
+                      value={tableRawText}
+                      onChange={(e) => setTableRawText(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 p-2.5 font-mono text-[11px] leading-relaxed text-slate-800 focus:border-teal-500 focus:outline-none"
+                    />
+
+                    {previewRows.length > 0 && (
+                      <div className="overflow-x-auto rounded-lg border border-slate-200">
+                        <table className="w-full text-left text-[11px]">
+                          <thead className="bg-slate-50 text-slate-500">
+                            <tr>
+                              <th className="px-2.5 py-1.5 font-semibold">Title</th>
+                              <th className="px-2.5 py-1.5 font-semibold">Priority</th>
+                              <th className="px-2.5 py-1.5 font-semibold">Stage</th>
+                              <th className="px-2.5 py-1.5 font-semibold">Linked Evidence</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {previewRows.map((row, idx) => (
+                              <tr key={idx}>
+                                <td className="px-2.5 py-1.5 font-medium text-slate-800">
+                                  {row.title}
+                                </td>
+                                <td className="px-2.5 py-1.5 font-mono">{row.priority}</td>
+                                <td className="px-2.5 py-1.5">{row.life_stage}</td>
+                                <td className="px-2.5 py-1.5 text-slate-500">
+                                  {row.incoming_evidence_result ?? "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between pt-2">
+                      <span className="text-slate-500">
+                        {previewRows.length} valid row(s) ready to import into Neon Postgres
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowIntakeModal(false)}
+                          className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={intakeSubmitting || previewRows.length === 0}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+                        >
+                          <Upload className="h-4 w-4" />
+                          Import {previewRows.length} Row(s)
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                );
+              })()
+            )}
           </div>
         </div>
       )}

@@ -11,7 +11,10 @@ from pydantic import BaseModel, Field
 from api.db import (
     append_audit_event,
     check_database_health,
+    create_evidence_record,
+    create_obligation,
     list_audit_events,
+    list_evidence_for_obligation,
     list_obligations,
     reset_obligations,
     update_obligation,
@@ -42,6 +45,39 @@ app.add_middleware(
 class VerifyClosureRequest(BaseModel):
     clinician_name: str = Field(..., min_length=2, max_length=128)
     closure_evidence: str = Field(..., min_length=4, max_length=1000)
+    evidence_id: str | None = Field(default=None, max_length=64)
+
+
+class ObligationIntakeItem(BaseModel):
+    id: str | None = Field(default=None, max_length=64)
+    patient_id: str | None = Field(default="PAT-AE-4092", max_length=64)
+    patient_name: str | None = Field(default="Amina Al-Mansoori (Synthetic)", max_length=128)
+    life_stage: str | None = Field(default="Preconception", max_length=64)
+    title: str = Field(..., min_length=3, max_length=256)
+    rationale: str = Field(..., min_length=4, max_length=1500)
+    evidence_source: str | None = Field(default="Manual Clinician Intake", max_length=256)
+    rule_version: str | None = Field(default="RB-CUSTOM-v1.0.0", max_length=32)
+    owner: str | None = Field(default="OB-GYN / Primary Care", max_length=128)
+    priority: str | None = Field(default="MEDIUM", max_length=32)
+    # Optional linked incoming evidence (e.g. lab result ready for verification)
+    incoming_evidence_result: str | None = Field(default=None, max_length=256)
+    incoming_evidence_facility: str | None = Field(default=None, max_length=256)
+
+
+class ObligationImportRequest(BaseModel):
+    obligations: list[ObligationIntakeItem] = Field(..., min_length=1, max_length=50)
+    source_label: str = Field(default="Table Import", max_length=128)
+
+
+class EvidenceIntakeRequest(BaseModel):
+    fhir_resource_type: str = Field(default="Observation", max_length=64)
+    code_display: str = Field(..., min_length=2, max_length=256)
+    result_value: str = Field(..., min_length=2, max_length=256)
+    reference_range: str | None = Field(default=None, max_length=128)
+    source_facility: str = Field(default="Malaffi HIE · Manual Intake", max_length=256)
+    accession_id: str | None = Field(default=None, max_length=128)
+    clinician_suggestion: str = Field(default="Dr. Layla Al-Hashimi (OB-GYN)", max_length=128)
+    summary_note: str | None = Field(default=None, max_length=1000)
 
 
 def _run_transition(event_type: str) -> dict[str, Any]:
@@ -237,6 +273,116 @@ def get_obligations():
     }
 
 
+def _next_obligation_id(existing: list[dict[str, Any]]) -> str:
+    nums = []
+    for item in existing:
+        raw = str(item.get("id", ""))
+        if raw.startswith("OBL-") and raw[4:].isdigit():
+            nums.append(int(raw[4:]))
+    return f"OBL-{max(nums, default=100) + 1}"
+
+
+@app.post("/api/obligations/import")
+def import_obligations(body: ObligationImportRequest):
+    """Ingest one or more clinical obligations from manual input or CSV/TSV table import."""
+    current = list_obligations()
+    created: list[dict[str, Any]] = []
+    for item in body.obligations:
+        obl_id = (item.id or "").strip() or _next_obligation_id(current + created)
+        priority = (item.priority or "MEDIUM").strip().upper()
+        if priority not in {"URGENT", "HIGH", "MEDIUM"}:
+            priority = "MEDIUM"
+        rec = create_obligation(
+            {
+                "id": obl_id,
+                "patient_id": item.patient_id,
+                "patient_name": item.patient_name,
+                "life_stage": item.life_stage,
+                "title": item.title.strip(),
+                "rationale": item.rationale.strip(),
+                "evidence_source": item.evidence_source,
+                "rule_version": item.rule_version,
+                "owner": item.owner,
+                "priority": priority,
+            }
+        )
+        created.append(rec)
+        append_audit_event(
+            event_type="OBLIGATION_IMPORTED",
+            actor=body.source_label,
+            summary=f"Ingested {obl_id} ({rec['title']}) at {rec['life_stage']} [{rec['priority']}].",
+            obligation_id=obl_id,
+        )
+        if item.incoming_evidence_result and item.incoming_evidence_result.strip():
+            ev_id = f"EVD-{obl_id}-{len(list_evidence_for_obligation(obl_id)) + 1}"
+            create_evidence_record(
+                {
+                    "id": ev_id,
+                    "obligation_id": obl_id,
+                    "fhir_resource_type": "Observation",
+                    "code_display": item.title.strip(),
+                    "result_value": item.incoming_evidence_result.strip(),
+                    "source_facility": item.incoming_evidence_facility or body.source_label,
+                    "summary_note": (
+                        f"Verified clinical result: {item.incoming_evidence_result.strip()} "
+                        f"({item.incoming_evidence_facility or body.source_label})."
+                    ),
+                }
+            )
+    return {
+        "imported_count": len(created),
+        "obligations": list_obligations(),
+        "audit_events": list_audit_events(),
+    }
+
+
+@app.get("/api/obligations/{obligation_id}/evidence")
+def get_obligation_evidence(obligation_id: str):
+    """Fetch incoming FHIR / HIE evidence records stored in Neon Postgres for an obligation."""
+    return {
+        "obligation_id": obligation_id,
+        "evidence": list_evidence_for_obligation(obligation_id),
+    }
+
+
+@app.post("/api/obligations/{obligation_id}/evidence")
+def add_obligation_evidence(obligation_id: str, body: EvidenceIntakeRequest):
+    """Attach a new incoming clinical evidence record to an obligation in Neon Postgres."""
+    existing = next((o for o in list_obligations() if o["id"] == obligation_id), None)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+    current_ev = list_evidence_for_obligation(obligation_id)
+    ev_id = f"EVD-{obligation_id}-{len(current_ev) + 1}"
+    summary_note = (body.summary_note or "").strip() or (
+        f"{body.code_display}: {body.result_value} ({body.source_facility})."
+    )
+    record = create_evidence_record(
+        {
+            "id": ev_id,
+            "obligation_id": obligation_id,
+            "fhir_resource_type": body.fhir_resource_type,
+            "code_display": body.code_display.strip(),
+            "result_value": body.result_value.strip(),
+            "reference_range": body.reference_range,
+            "source_facility": body.source_facility.strip(),
+            "accession_id": body.accession_id,
+            "clinician_suggestion": body.clinician_suggestion.strip(),
+            "summary_note": summary_note,
+        }
+    )
+    append_audit_event(
+        event_type="EVIDENCE_RECORDED",
+        actor=body.source_facility.strip(),
+        summary=f"Recorded {record['fhir_resource_type']} evidence ({ev_id}) for {obligation_id}: {record['result_value']}",
+        obligation_id=obligation_id,
+    )
+    return {
+        "record": record,
+        "evidence": list_evidence_for_obligation(obligation_id),
+        "audit_events": list_audit_events(),
+    }
+
+
 @app.post("/api/transitions/pregnancy")
 def trigger_pregnancy_transition():
     return _run_transition("FHIR_PREGNANCY_CONFIRMED")
@@ -287,10 +433,11 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
             "closure_evidence": body.closure_evidence,
         },
     )
+    evidence_ref = f" [Evidence ID: {body.evidence_id}]" if body.evidence_id else ""
     append_audit_event(
         event_type="EVIDENCE_VERIFIED_CLOSURE",
         actor=body.clinician_name,
-        summary=f"Closed {obligation_id} with verified evidence: {body.closure_evidence}",
+        summary=f"Closed {obligation_id} with verified evidence{evidence_ref}: {body.closure_evidence}",
         obligation_id=obligation_id,
     )
     return {
