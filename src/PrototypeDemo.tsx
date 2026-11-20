@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Baby,
+  Bot,
   CheckCircle2,
   ClipboardList,
   Code2,
@@ -12,7 +13,10 @@ import {
   Eye,
   FileCheck2,
   GitBranch,
+  Info,
   Lock,
+  Pause,
+  Play,
   RotateCcw,
   ShieldAlert,
   Sparkles,
@@ -177,10 +181,53 @@ const STATUS_STYLES: Record<string, string> = {
   VERIFIED_CLOSED: "bg-emerald-100 text-emerald-800",
 };
 
+const INTERIM_TIPS: Record<string, { title: string; body: string }[]> = {
+  pregnancy: [
+    {
+      title: "UAE PHI Privacy Firewall Active",
+      body: "Deterministic clinical rules run first inside the UAE boundary. Patient names, IDs, and raw HIE notes are stripped before Gemma 4 receives an ephemeral case token.",
+    },
+    {
+      title: "Clinical Safety Rule · First-Trimester TSH",
+      body: "Preconception TSH of 4.8 mIU/L exceeds the first-trimester target (<2.5 mIU/L). AI never diagnoses or prescribes — it only drafts the OB-GYN handoff checklist for clinician sign-off.",
+    },
+    {
+      title: "Live-Vaccine Contraindication Guard",
+      body: "Rubella MMR is a live-attenuated vaccine contraindicated during pregnancy. ReproBridge preserves the obligation and locks closure until postpartum delivery.",
+    },
+  ],
+  postpartum: [
+    {
+      title: "Postpartum Wake-Up Rule",
+      body: "Delivery lifts the pregnancy live-vaccine contraindication, automatically reactivating deferred OBL-102 as URGENT for pre-discharge MMR immunization.",
+    },
+    {
+      title: "Assistive AI Only · Zero Autonomous Closure",
+      body: "Gemma 4 drafts a de-identified postpartum discharge handoff while Neon Postgres enforces clinician evidence verification before any obligation can close.",
+    },
+  ],
+};
+
+function parseStreamedSections(raw: string): { summary: string; handoff: string } {
+  const trimmed = raw.trim();
+  if (trimmed.includes("HANDOFF:")) {
+    const [before, after] = trimmed.split("HANDOFF:", 2);
+    return {
+      summary: before.replace(/^SUMMARY:\s*/i, "").trim(),
+      handoff: after.trim(),
+    };
+  }
+  return {
+    summary: trimmed.replace(/^SUMMARY:\s*/i, "").trim(),
+    handoff: "",
+  };
+}
+
 export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) {
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [agentSummary, setAgentSummary] = useState<string | null>(null);
   const [specialistHandoff, setSpecialistHandoff] = useState<string | null>(null);
   const [aiMetadata, setAiMetadata] = useState<AiMetadata | null>(null);
@@ -189,6 +236,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [expandedFhirId, setExpandedFhirId] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceStep[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingPhase, setStreamingPhase] = useState<string | null>(null);
+  const [streamingRawText, setStreamingRawText] = useState("");
+  const [streamingModel, setStreamingModel] = useState<string | null>(null);
+  const [activeTransitionKind, setActiveTransitionKind] = useState<"pregnancy" | "postpartum">("pregnancy");
+  const [tipIndex, setTipIndex] = useState(0);
+  const [tipsPaused, setTipsPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [verifyTarget, setVerifyTarget] = useState<Obligation | null>(null);
@@ -212,12 +266,23 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
       }
     } catch {
       setError("Unable to reach ReproBridge API. Start FastAPI or deploy on Vercel.");
+    } finally {
+      setInitialLoading(false);
     }
   }
 
   useEffect(() => {
     void loadData();
   }, []);
+
+  useEffect(() => {
+    if (!isStreaming || tipsPaused) return;
+    const tips = INTERIM_TIPS[activeTransitionKind];
+    const timer = window.setInterval(() => {
+      setTipIndex((prev) => (prev + 1) % tips.length);
+    }, 4500);
+    return () => window.clearInterval(timer);
+  }, [isStreaming, tipsPaused, activeTransitionKind]);
 
   function openVerifyModal(obl: Obligation) {
     const preset = DEFAULT_CLOSURE_EVIDENCE[obl.id] ?? {
@@ -232,28 +297,90 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   async function runTransition(
     endpoint: "/api/transitions/pregnancy" | "/api/transitions/postpartum"
   ) {
+    const kind = endpoint.includes("postpartum") ? "postpartum" : "pregnancy";
+    setActiveTransitionKind(kind);
+    setTipIndex(0);
     setLoading(true);
+    setIsStreaming(true);
+    setStreamingPhase("Running deterministic clinical rules & UAE PHI firewall…");
+    setStreamingRawText("");
+    setStreamingModel(null);
+    setAgentSummary(null);
+    setSpecialistHandoff(null);
+    setAiMetadata(null);
     setError(null);
+
     try {
-      const res = await fetch(endpoint, { method: "POST" });
-      if (!res.ok) {
+      const res = await fetch(`${endpoint}/stream`, {
+        method: "POST",
+        headers: { Accept: "text/event-stream" },
+      });
+      if (!res.ok || !res.body) {
         const errBody = await res.json().catch(() => ({}));
         throw new Error(
           errBody.detail || `Transition request failed (HTTP ${res.status})`
         );
       }
-      const data = await res.json();
-      setObligations(data.obligations ?? []);
-      setAuditEvents(data.audit_events ?? []);
-      setAgentSummary(data.agent_summary ?? null);
-      setSpecialistHandoff(data.specialist_handoff ?? null);
-      setAiMetadata(data.ai_metadata ?? null);
-      setPrivacyReport(data.privacy_report ?? null);
-      setTrace(data.trace ?? []);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulated = "";
+
+      const handleEventBlock = (block: string) => {
+        const lines = block.split("\n");
+        let eventName = "message";
+        const dataLines: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+        if (dataLines.length === 0) return;
+        const payload = JSON.parse(dataLines.join("\n"));
+
+        if (eventName === "deterministic_complete") {
+          setObligations(payload.obligations ?? []);
+          setAuditEvents(payload.audit_events ?? []);
+          setPrivacyReport(payload.privacy_report ?? null);
+          setTrace(payload.trace ?? []);
+          setStreamingPhase("UAE Firewall verified (0 PHI) · Streaming Gemma 4 synthesis…");
+        } else if (eventName === "token") {
+          accumulated += payload.delta ?? "";
+          setStreamingRawText(accumulated);
+          if (payload.model) setStreamingModel(payload.model);
+          setStreamingPhase("Streaming de-identified clinician handoff tokens…");
+        } else if (eventName === "complete") {
+          setObligations(payload.obligations ?? []);
+          setAuditEvents(payload.audit_events ?? []);
+          setAgentSummary(payload.agent_summary ?? null);
+          setSpecialistHandoff(payload.specialist_handoff ?? null);
+          setAiMetadata(payload.ai_metadata ?? null);
+          setPrivacyReport(payload.privacy_report ?? null);
+          setTrace(payload.trace ?? []);
+          setStreamingPhase(null);
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+        for (const block of blocks) {
+          if (block.trim()) handleEventBlock(block);
+        }
+      }
+      if (buffer.trim()) handleEventBlock(buffer);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Transition failed");
     } finally {
       setLoading(false);
+      setIsStreaming(false);
+      setStreamingPhase(null);
     }
   }
 
@@ -306,6 +433,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     }
   }
 
+  const parsedStream = parseStreamedSections(streamingRawText);
+  const displaySummary = agentSummary ?? (isStreaming ? parsedStream.summary : null);
+  const displayHandoff = specialistHandoff ?? (isStreaming ? parsedStream.handoff : null);
+  const currentTip = INTERIM_TIPS[activeTransitionKind][tipIndex] ?? INTERIM_TIPS.pregnancy[0];
+  const showHarnessPanel = isStreaming || Boolean(agentSummary);
   const patient = obligations[0];
   const isPostpartum = obligations.some((o) => o.life_stage === "Postpartum");
   const isAntenatal =
@@ -450,37 +582,144 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           </div>
         </section>
 
-        {/* Hybrid LangGraph Orchestrator Summary, Node Trace & UAE Privacy Firewall */}
-        {agentSummary && (
-          <section className="space-y-4 rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm text-teal-950">
+        {/* Hybrid LangGraph Orchestrator Summary, Live Streaming, Micro-Interactions & UAE Privacy Firewall */}
+        {showHarnessPanel && (
+          <section
+            aria-live="polite"
+            aria-busy={isStreaming}
+            className="space-y-4 rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm text-teal-950"
+          >
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="flex items-start gap-2.5">
-                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-                <div>
-                  <p className="font-semibold">
-                    Hybrid Care-Resolution Harness (Deterministic Rules + OpenRouter Synthesis)
-                  </p>
-                  <p className="mt-1 text-teal-900">{agentSummary}</p>
+              <div className="flex items-start gap-3">
+                {/* Floating agent avatar that reacts while thinking/streaming */}
+                <div
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                    isStreaming
+                      ? "rb-float-avatar border-teal-300 bg-teal-600 text-white shadow-xs"
+                      : "border-teal-200 bg-white text-teal-700"
+                  }`}
+                >
+                  {isStreaming ? (
+                    <Bot className="h-4.5 w-4.5" />
+                  ) : (
+                    <ShieldAlert className="h-4 w-4" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold">
+                      Hybrid Care-Resolution Harness (Deterministic Rules + OpenRouter Synthesis)
+                    </p>
+                    {isStreaming && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-teal-100 px-2 py-0.5 text-[11px] font-medium text-teal-800">
+                        <progress
+                          aria-label="Synthesizing clinical handoff"
+                          className="rb-spinner"
+                        />
+                        <span>{streamingPhase ?? "Synthesizing…"}</span>
+                        <span className="inline-flex items-center gap-0.5" aria-hidden="true">
+                          <span className="rb-typing-dot h-1 w-1 rounded-full bg-teal-600" />
+                          <span
+                            className="rb-typing-dot h-1 w-1 rounded-full bg-teal-600"
+                            style={{ animationDelay: "0.2s" }}
+                          />
+                          <span
+                            className="rb-typing-dot h-1 w-1 rounded-full bg-teal-600"
+                            style={{ animationDelay: "0.4s" }}
+                          />
+                        </span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Streamed summary text OR skeleton loader */}
+                  {displaySummary ? (
+                    <p className="mt-1.5 leading-relaxed text-teal-900">
+                      {displaySummary}
+                      {isStreaming && !displayHandoff && (
+                        <span className="rb-stream-caret" aria-hidden="true" />
+                      )}
+                    </p>
+                  ) : (
+                    <div className="mt-2.5 space-y-2" aria-label="Loading coordination summary">
+                      <div className="rb-shimmer h-3.5 w-full rounded" />
+                      <div className="rb-shimmer h-3.5 w-4/5 rounded" />
+                    </div>
+                  )}
                 </div>
               </div>
-              {aiMetadata && (
+
+              {(aiMetadata || streamingModel) && (
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-300 bg-white px-2.5 py-1 font-mono text-[11px] font-medium text-teal-800">
                   <Cpu className="h-3 w-3" />
-                  {aiMetadata.provider} · {aiMetadata.model}
+                  {aiMetadata
+                    ? `${aiMetadata.provider} · ${aiMetadata.model}`
+                    : `openrouter · ${streamingModel}`}
                 </span>
               )}
             </div>
 
-            {specialistHandoff && (
+            {/* Interim Context: Clinical Disclaimer & Educational Tip while streaming */}
+            {isStreaming && (
+              <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50/90 px-3.5 py-2.5 text-xs text-amber-950">
+                <div className="flex items-start gap-2">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                  <div>
+                    <p className="font-semibold text-amber-900">
+                      While you wait · {currentTip.title}
+                    </p>
+                    <p className="mt-0.5 leading-relaxed text-amber-900/90">
+                      {currentTip.body}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTipsPaused((p) => !p)}
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-medium text-amber-900 hover:bg-amber-50"
+                >
+                  {tipsPaused ? (
+                    <>
+                      <Play className="h-3 w-3" />
+                      Resume tips
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="h-3 w-3" />
+                      Pause tips
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Specialist Handoff — streamed live or skeleton loader */}
+            {displayHandoff ? (
               <div className="rounded-lg border border-teal-200 bg-white p-3.5 text-xs text-slate-700">
                 <p className="font-semibold uppercase tracking-wider text-teal-700">
                   Draft Specialist Handoff (Pending Clinician Approval)
                 </p>
                 <p className="mt-1.5 whitespace-pre-line leading-relaxed">
-                  {specialistHandoff}
+                  {displayHandoff}
+                  {isStreaming && <span className="rb-stream-caret" aria-hidden="true" />}
                 </p>
               </div>
-            )}
+            ) : isStreaming ? (
+              <div
+                className="rounded-lg border border-teal-200 bg-white p-3.5 text-xs"
+                aria-label="Drafting specialist handoff"
+              >
+                <p className="font-semibold uppercase tracking-wider text-teal-700">
+                  Draft Specialist Handoff (Streaming from Gemma 4…)
+                </p>
+                <div className="mt-2.5 space-y-2">
+                  <div className="rb-shimmer h-3 w-11/12 rounded" />
+                  <div className="rb-shimmer h-3 w-3/4 rounded" />
+                  <div className="rb-shimmer h-3 w-5/6 rounded" />
+                </div>
+              </div>
+            ) : null}
 
             {trace.length > 0 && (
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -511,6 +750,22 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     )}
                   </div>
                 ))}
+                {isStreaming && trace.length === 3 && (
+                  <div className="flex flex-col justify-between rounded-lg border border-dashed border-teal-300 bg-white/80 p-3 text-xs">
+                    <div>
+                      <span className="font-mono font-semibold text-teal-800">
+                        4. synthesize_coordination_brief
+                      </span>
+                      <span className="mt-1 block w-fit rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-purple-800">
+                        streaming…
+                      </span>
+                      <div className="mt-2 space-y-1.5">
+                        <div className="rb-shimmer h-2.5 w-full rounded" />
+                        <div className="rb-shimmer h-2.5 w-2/3 rounded" />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -568,6 +823,26 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
               Clinical Obligation Passport ({obligations.length})
             </h3>
           </div>
+
+          {initialLoading && obligations.length === 0 && (
+            <div className="space-y-4" aria-label="Loading clinical obligations">
+              {[0, 1].map((idx) => (
+                <div
+                  key={idx}
+                  className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="rb-shimmer h-4 w-16 rounded" />
+                    <div className="rb-shimmer h-5 w-16 rounded-full" />
+                    <div className="rb-shimmer h-5 w-20 rounded-full" />
+                  </div>
+                  <div className="rb-shimmer mt-3 h-5 w-2/3 rounded" />
+                  <div className="rb-shimmer mt-2 h-3.5 w-full rounded" />
+                  <div className="rb-shimmer mt-1.5 h-3.5 w-5/6 rounded" />
+                </div>
+              ))}
+            </div>
+          )}
 
           {obligations.map((obl) => {
             const fhirRecord = SYNTHETIC_FHIR_RECORDS[obl.id];

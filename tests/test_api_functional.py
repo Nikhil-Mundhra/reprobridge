@@ -105,7 +105,15 @@ def test_full_six_step_functional_flow(monkeypatch):
     assert verify_102.status_code == 200
     assert verify_102.json()["obligation"]["status"] == "VERIFIED_CLOSED"
 
-    # 9. Reset restores initial state
+    # 9. Streaming SSE transition emits deterministic_complete + complete events with zero PHI
+    stream_resp = client.post("/api/transitions/pregnancy/stream")
+    assert stream_resp.status_code == 200
+    assert "text/event-stream" in stream_resp.headers["content-type"]
+    body = stream_resp.text
+    assert "event: deterministic_complete" in body
+    assert "event: complete" in body
+
+    # 10. Reset restores initial state
     final_reset = client.post("/api/demo/reset")
     assert final_reset.status_code == 200
     assert all(o["status"] == "OPEN" for o in final_reset.json()["obligations"])
