@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   Activity,
   ArrowLeft,
   ArrowRight,
   Baby,
   Bot,
+  Check,
   CheckCircle2,
   ClipboardList,
   Code2,
+  Copy,
   Cpu,
   Database,
   Eye,
@@ -16,7 +18,9 @@ import {
   Info,
   Lock,
   Pause,
+  Pencil,
   Play,
+  RefreshCw,
   RotateCcw,
   ShieldAlert,
   Sparkles,
@@ -268,7 +272,33 @@ function parseStreamedSections(raw: string): { summary: string; handoff: string 
   };
 }
 
+function parseHandoffItems(text: string): string[] {
+  const lines = text
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[•*-]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean);
+  if (lines.length > 1) return lines;
+  // Handle single-line numbered lists like "1) ... 2) ..."
+  const numbered = text
+    .split(/\s*(?=\d+[.)]\s+)/)
+    .map((part) => part.replace(/^\s*\d+[.)]\s*/, "").trim())
+    .filter(Boolean);
+  return numbered.length > 0 ? numbered : lines;
+}
+
+function detectObligationId(text: string): string | null {
+  const match = text.match(/\bOBL-\d+\b/i);
+  if (match) return match[0].toUpperCase();
+  if (/thyroid|tsh|RB-THYROID/i.test(text)) return "OBL-101";
+  if (/rubella|mmr|vaccin|RB-IMMUNE/i.test(text)) return "OBL-102";
+  return null;
+}
+
 export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) {
+  const handoffCopyId = useId();
+  const copyTimerRef = useRef<number | null>(null);
+  const lastCopyMsgRef = useRef<string>("");
+
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -278,6 +308,15 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [aiMetadata, setAiMetadata] = useState<AiMetadata | null>(null);
   const [privacyReport, setPrivacyReport] = useState<PrivacyReport | null>(null);
   const [showPayload, setShowPayload] = useState(false);
+  const [privacyTab, setPrivacyTab] = useState<"outbound" | "redacted">("outbound");
+  const [selectedTraceNode, setSelectedTraceNode] = useState<string | null>(null);
+  const [checkedHandoff, setCheckedHandoff] = useState<Record<number, boolean>>({});
+  const [isEditingHandoff, setIsEditingHandoff] = useState(false);
+  const [handoffDraft, setHandoffDraft] = useState("");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [copyAnnouncement, setCopyAnnouncement] = useState("");
+  const [streamTokenCount, setStreamTokenCount] = useState(0);
+  const [streamDurationMs, setStreamDurationMs] = useState<number | null>(null);
   const [expandedFhirId, setExpandedFhirId] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceStep[]>([]);
   const [loading, setLoading] = useState(false);
@@ -339,10 +378,39 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setVerifyTarget(obl);
   }
 
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  async function handleCopyHandoff(targetText: string) {
+    if (!targetText.trim()) return;
+    if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(targetText.trim());
+      ok = true;
+    } catch {
+      ok = false;
+    }
+    let message = ok ? "Copied" : "Copy failed";
+    if (message === lastCopyMsgRef.current) message += "\u00A0";
+    lastCopyMsgRef.current = message;
+    setCopyState(ok ? "copied" : "failed");
+    setCopyAnnouncement("");
+    requestAnimationFrame(() => setCopyAnnouncement(message));
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopyState("idle");
+      setCopyAnnouncement("");
+    }, 2000);
+  }
+
   async function runTransition(
     endpoint: "/api/transitions/pregnancy" | "/api/transitions/postpartum"
   ) {
     const kind = endpoint.includes("postpartum") ? "postpartum" : "pregnancy";
+    const startedAt = performance.now();
     setActiveTransitionKind(kind);
     setTipIndex(0);
     setLoading(true);
@@ -350,6 +418,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setStreamingPhase("Running deterministic clinical rules & UAE PHI firewall…");
     setStreamingRawText("");
     setStreamingModel(null);
+    setStreamTokenCount(0);
+    setStreamDurationMs(null);
+    setCheckedHandoff({});
+    setIsEditingHandoff(false);
+    setSelectedTraceNode(null);
     setAgentSummary(null);
     setSpecialistHandoff(null);
     setAiMetadata(null);
@@ -395,6 +468,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         } else if (eventName === "token") {
           accumulated += payload.delta ?? "";
           setStreamingRawText(accumulated);
+          setStreamTokenCount((c) => c + 1);
           if (payload.model) setStreamingModel(payload.model);
           setStreamingPhase("Streaming de-identified clinician handoff tokens…");
         } else if (eventName === "complete") {
@@ -405,6 +479,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           setAiMetadata(payload.ai_metadata ?? null);
           setPrivacyReport(payload.privacy_report ?? null);
           setTrace(payload.trace ?? []);
+          setStreamDurationMs(Math.round(performance.now() - startedAt));
           setStreamingPhase(null);
         }
       };
@@ -743,14 +818,33 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 </div>
               </div>
 
-              {(aiMetadata || streamingModel) && (
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-300 bg-white px-2.5 py-1 font-mono text-[11px] font-medium text-teal-800">
-                  <Cpu className="h-3 w-3" />
-                  {aiMetadata
-                    ? `${aiMetadata.provider} · ${aiMetadata.model}`
-                    : `openrouter · ${streamingModel}`}
-                </span>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {(aiMetadata || streamingModel) && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-300 bg-white px-2.5 py-1 font-mono text-[11px] font-medium text-teal-800">
+                    <Cpu className="h-3 w-3" />
+                    {aiMetadata
+                      ? `${aiMetadata.provider} · ${aiMetadata.model}`
+                      : `openrouter · ${streamingModel}`}
+                  </span>
+                )}
+                {!isStreaming && agentSummary && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      runTransition(
+                        activeTransitionKind === "postpartum"
+                          ? "/api/transitions/postpartum"
+                          : "/api/transitions/pregnancy"
+                      )
+                    }
+                    disabled={loading}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-teal-300 bg-white px-2.5 py-1 text-[11px] font-medium text-teal-800 transition hover:bg-teal-100/60 disabled:opacity-50"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Regenerate Brief
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Interim Context: Clinical Disclaimer & Educational Tip while streaming */}
@@ -787,17 +881,179 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
               </div>
             )}
 
-            {/* Specialist Handoff — streamed live or skeleton loader */}
+            {/* Interactive Specialist Handoff — checkable bullets, quick verify, inline edit, accessible copy */}
             {displayHandoff ? (
-              <div className="rounded-lg border border-teal-200 bg-white p-3.5 text-xs text-slate-700">
-                <p className="font-semibold uppercase tracking-wider text-teal-700">
-                  Draft Specialist Handoff (Pending Clinician Approval)
-                </p>
-                <p className="mt-1.5 whitespace-pre-line leading-relaxed">
-                  {displayHandoff}
-                  {isStreaming && <span className="rb-stream-caret" aria-hidden="true" />}
-                </p>
-              </div>
+              (() => {
+                const handoffItems = parseHandoffItems(displayHandoff);
+                const checkedCount = handoffItems.filter((_, i) => checkedHandoff[i]).length;
+
+                return (
+                  <div className="rounded-lg border border-teal-200 bg-white p-3.5 text-xs text-slate-700">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold uppercase tracking-wider text-teal-700">
+                          Draft Specialist Handoff (Pending Clinician Approval)
+                        </p>
+                        {!isStreaming && handoffItems.length > 0 && (
+                          <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-800">
+                            {checkedCount} / {handoffItems.length} reviewed
+                          </span>
+                        )}
+                      </div>
+
+                      {!isStreaming && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!isEditingHandoff) {
+                                setHandoffDraft(specialistHandoff ?? displayHandoff);
+                                setIsEditingHandoff(true);
+                              } else {
+                                setIsEditingHandoff(false);
+                              }
+                            }}
+                            className="inline-flex min-h-6 min-w-6 items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50"
+                          >
+                            <Pencil className="h-3 w-3" aria-hidden="true" />
+                            {isEditingHandoff ? "Cancel Edit" : "Edit Draft"}
+                          </button>
+
+                          <span className="relative inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleCopyHandoff(
+                                  isEditingHandoff ? handoffDraft : displayHandoff
+                                )
+                              }
+                              data-copied={copyState === "copied" ? "" : undefined}
+                              data-failed={copyState === "failed" ? "" : undefined}
+                              className="inline-flex min-h-6 min-w-6 items-center gap-1 rounded border border-teal-200 bg-teal-50/70 px-2 py-1 text-[11px] font-medium text-teal-800 transition hover:bg-teal-100"
+                            >
+                              {copyState === "copied" ? (
+                                <Check className="h-3 w-3 text-emerald-700" aria-hidden="true" />
+                              ) : (
+                                <Copy className="h-3 w-3" aria-hidden="true" />
+                              )}
+                              Copy Handoff
+                            </button>
+                            <span
+                              role="status"
+                              className={`text-[11px] font-medium transition-opacity duration-150 ${
+                                copyState === "idle"
+                                  ? "pointer-events-none opacity-0"
+                                  : copyState === "failed"
+                                    ? "text-rose-700 opacity-100"
+                                    : "text-emerald-700 opacity-100"
+                              }`}
+                            >
+                              {copyAnnouncement}
+                            </span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {isStreaming ? (
+                      <p
+                        id={handoffCopyId}
+                        className="mt-2 whitespace-pre-line leading-relaxed"
+                      >
+                        {displayHandoff}
+                        <span className="rb-stream-caret" aria-hidden="true" />
+                      </p>
+                    ) : isEditingHandoff ? (
+                      <div className="mt-2.5 space-y-2">
+                        <textarea
+                          rows={4}
+                          value={handoffDraft}
+                          onChange={(e) => setHandoffDraft(e.target.value)}
+                          aria-label="Edit specialist handoff draft"
+                          className="w-full rounded-lg border border-teal-300 p-2.5 text-xs leading-relaxed text-slate-800 focus:border-teal-500 focus:outline-none"
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingHandoff(false)}
+                            className="rounded border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSpecialistHandoff(handoffDraft.trim());
+                              setIsEditingHandoff(false);
+                              setCheckedHandoff({});
+                            }}
+                            className="rounded bg-teal-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-teal-700"
+                          >
+                            Save Clinician Draft
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <ul id={handoffCopyId} className="mt-2.5 space-y-2">
+                        {handoffItems.map((item, idx) => {
+                          const checked = Boolean(checkedHandoff[idx]);
+                          const oblId = detectObligationId(item);
+                          const matchedObl = oblId
+                            ? obligations.find((o) => o.id === oblId)
+                            : undefined;
+                          const canQuickVerify =
+                            matchedObl &&
+                            matchedObl.status !== "VERIFIED_CLOSED" &&
+                            matchedObl.status !== "DEFERRED_TO_POSTPARTUM";
+
+                          return (
+                            <li
+                              key={idx}
+                              className={`flex flex-wrap items-start justify-between gap-2 rounded-lg border p-2.5 transition ${
+                                checked
+                                  ? "border-emerald-200 bg-emerald-50/50"
+                                  : "border-slate-100 bg-slate-50/60"
+                              }`}
+                            >
+                              <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setCheckedHandoff((prev) => ({
+                                      ...prev,
+                                      [idx]: !prev[idx],
+                                    }))
+                                  }
+                                  className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                                />
+                                <span
+                                  className={`leading-relaxed ${
+                                    checked ? "text-slate-400 line-through" : "text-slate-700"
+                                  }`}
+                                >
+                                  {item}
+                                </span>
+                              </label>
+
+                              {canQuickVerify && matchedObl && (
+                                <button
+                                  type="button"
+                                  onClick={() => openVerifyModal(matchedObl)}
+                                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 py-1 text-[11px] font-medium text-emerald-800 transition hover:bg-emerald-50"
+                                >
+                                  <FileCheck2 className="h-3 w-3" aria-hidden="true" />
+                                  Verify {matchedObl.id}
+                                </button>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()
             ) : isStreaming ? (
               <div
                 className="rounded-lg border border-teal-200 bg-white p-3.5 text-xs"
@@ -814,87 +1070,264 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
               </div>
             ) : null}
 
+            {/* Clickable Trace Cards 1–4 with inline Step Inspector Drawer */}
             {trace.length > 0 && (
-              <div className="rb-trace-grid">
-                {trace.map((step, idx) => {
-                  const meta = TRACE_NODE_META[step.node] ?? {
-                    title: step.node.replaceAll("_", " "),
-                    accent: "border-t-teal-500",
-                    badge: "bg-teal-100 text-teal-800",
-                  };
-                  const exec = formatExecutionLabel(step.execution);
+              <div className="space-y-3">
+                <div className="rb-trace-grid">
+                  {trace.map((step, idx) => {
+                    const meta = TRACE_NODE_META[step.node] ?? {
+                      title: step.node.replaceAll("_", " "),
+                      accent: "border-t-teal-500",
+                      badge: "bg-teal-100 text-teal-800",
+                    };
+                    const exec = formatExecutionLabel(step.execution);
+                    const isSelected = selectedTraceNode === step.node;
 
-                  return (
-                    <article
-                      key={step.node}
-                      title={step.node}
-                      className={`rb-trace-card rounded-xl border border-slate-200/90 border-t-2 ${meta.accent} bg-white p-3.5 text-xs shadow-xs`}
-                    >
-                      <header className="flex items-start justify-between gap-2 min-w-0">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span
-                            className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-bold ${meta.badge}`}
+                    return (
+                      <article
+                        key={step.node}
+                        title={step.node}
+                        className={`rb-trace-card rounded-xl border border-t-2 ${meta.accent} bg-white p-3.5 text-xs shadow-xs transition ${
+                          isSelected
+                            ? "border-teal-400 ring-2 ring-teal-500/25"
+                            : "border-slate-200/90 hover:border-teal-300"
+                        }`}
+                      >
+                        <header className="flex items-start justify-between gap-2 min-w-0">
+                          <button
+                            type="button"
+                            aria-expanded={isSelected}
+                            onClick={() =>
+                              setSelectedTraceNode((prev) =>
+                                prev === step.node ? null : step.node
+                              )
+                            }
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600"
                           >
-                            {idx + 1}
+                            <span
+                              className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-bold ${meta.badge}`}
+                            >
+                              {idx + 1}
+                            </span>
+                            <h4 className="font-semibold leading-snug text-slate-900">
+                              {meta.title}
+                            </h4>
+                          </button>
+                          {idx < 3 && (
+                            <ArrowRight
+                              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-400"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </header>
+
+                        <p className="leading-relaxed text-slate-600">{step.detail}</p>
+
+                        <footer className="flex flex-wrap items-center justify-between gap-1.5 border-t border-slate-100 pt-2">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${exec.className}`}
+                          >
+                            {exec.label}
                           </span>
-                          <h4 className="font-semibold leading-snug text-slate-900">
-                            {meta.title}
-                          </h4>
-                        </div>
-                        {idx < 3 && (
-                          <ArrowRight
-                            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-400"
-                            aria-hidden="true"
-                          />
-                        )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSelectedTraceNode((prev) =>
+                                prev === step.node ? null : step.node
+                              )
+                            }
+                            className="inline-flex items-center gap-1 text-[10px] font-medium text-teal-700 hover:underline"
+                          >
+                            <Lock className="h-2.5 w-2.5 text-emerald-700" aria-hidden="true" />
+                            <span>{isSelected ? "Hide details" : "Inspect"}</span>
+                          </button>
+                        </footer>
+                      </article>
+                    );
+                  })}
+                  {isStreaming && trace.length === 3 && (
+                    <article
+                      title="synthesize_coordination_brief"
+                      className="rb-trace-card rounded-xl border border-dashed border-purple-300 border-t-2 border-t-purple-500 bg-white/90 p-3.5 text-xs shadow-xs"
+                    >
+                      <header className="flex items-center gap-2 min-w-0">
+                        <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 font-mono text-[11px] font-bold text-purple-800">
+                          4
+                        </span>
+                        <h4 className="font-semibold leading-snug text-slate-900">
+                          Synthesize Handoff Brief
+                        </h4>
                       </header>
 
-                      <p className="leading-relaxed text-slate-600">{step.detail}</p>
+                      <div className="space-y-1.5">
+                        <div className="rb-shimmer h-2.5 w-full rounded" />
+                        <div className="rb-shimmer h-2.5 w-4/5 rounded" />
+                      </div>
 
-                      <footer className="flex flex-wrap items-center justify-between gap-1.5 border-t border-slate-100 pt-2">
-                        <span
-                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${exec.className}`}
-                        >
-                          {exec.label}
+                      <footer className="flex items-center justify-between border-t border-slate-100 pt-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-800">
+                          <progress aria-label="Streaming brief" className="rb-spinner" />
+                          Streaming…
                         </span>
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700">
-                          <Lock className="h-2.5 w-2.5" />
+                          <Lock className="h-2.5 w-2.5" aria-hidden="true" />
                           0 PHI
                         </span>
                       </footer>
                     </article>
-                  );
-                })}
-                {isStreaming && trace.length === 3 && (
-                  <article
-                    title="synthesize_coordination_brief"
-                    className="rb-trace-card rounded-xl border border-dashed border-purple-300 border-t-2 border-t-purple-500 bg-white/90 p-3.5 text-xs shadow-xs"
-                  >
-                    <header className="flex items-center gap-2 min-w-0">
-                      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 font-mono text-[11px] font-bold text-purple-800">
-                        4
-                      </span>
-                      <h4 className="font-semibold leading-snug text-slate-900">
-                        Synthesize Handoff Brief
-                      </h4>
-                    </header>
+                  )}
+                </div>
 
-                    <div className="space-y-1.5">
-                      <div className="rb-shimmer h-2.5 w-full rounded" />
-                      <div className="rb-shimmer h-2.5 w-4/5 rounded" />
+                {/* Step Inspector Drawer */}
+                {selectedTraceNode && (
+                  <div className="rounded-xl border border-teal-200 bg-white p-4 text-xs text-slate-700 shadow-xs">
+                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-900">
+                          Step Inspector ·{" "}
+                          {TRACE_NODE_META[selectedTraceNode]?.title ?? selectedTraceNode}
+                        </span>
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
+                          {selectedTraceNode}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTraceNode(null)}
+                        aria-label="Close step inspector"
+                        className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                      >
+                        <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
                     </div>
 
-                    <footer className="flex items-center justify-between border-t border-slate-100 pt-2">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-800">
-                        <progress aria-label="Streaming brief" className="rb-spinner" />
-                        Streaming…
-                      </span>
-                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700">
-                        <Lock className="h-2.5 w-2.5" />
-                        0 PHI
-                      </span>
-                    </footer>
-                  </article>
+                    {selectedTraceNode === "detect_open_obligations" && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-slate-500">
+                          Queried Neon Clinical Obligation Passport for unresolved care gaps:
+                        </p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {obligations.map((obl) => (
+                            <div
+                              key={obl.id}
+                              className="rounded-lg border border-slate-200 bg-slate-50 p-2.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono font-semibold text-slate-800">
+                                  {obl.id}
+                                </span>
+                                <span className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600">
+                                  {obl.rule_version}
+                                </span>
+                              </div>
+                              <p className="mt-1 font-medium text-slate-900">{obl.title}</p>
+                              <p className="mt-0.5 text-[11px] text-slate-500">
+                                Owner: {obl.owner} · Stage: {obl.life_stage}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedTraceNode === "evaluate_life_stage_transition" && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-slate-500">
+                          Version-controlled deterministic transitions applied (zero LLM involvement):
+                        </p>
+                        <div className="space-y-2">
+                          {obligations.map((obl) => (
+                            <div
+                              key={obl.id}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                            >
+                              <div>
+                                <span className="font-mono font-semibold text-slate-800">
+                                  {obl.id}
+                                </span>{" "}
+                                <span className="text-slate-500">({obl.rule_version})</span>
+                                <p className="mt-0.5 text-[11px] text-slate-600">{obl.owner}</p>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                                    PRIORITY_STYLES[obl.priority] ?? "bg-slate-100 text-slate-700"
+                                  }`}
+                                >
+                                  {obl.priority}
+                                </span>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                    STATUS_STYLES[obl.status] ?? "bg-slate-100 text-slate-700"
+                                  }`}
+                                >
+                                  {obl.status}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {selectedTraceNode === "apply_uae_privacy_firewall" && privacyReport && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-slate-500">
+                          Pseudonymized case as{" "}
+                          <span className="font-mono font-semibold text-indigo-800">
+                            {String(privacyReport.payload.case_token ?? "ANON-CASE")}
+                          </span>{" "}
+                          and verified <span className="font-semibold text-emerald-700">0 PHI</span>{" "}
+                          in outbound payload.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPayload(true);
+                            setPrivacyTab("redacted");
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-800 hover:bg-indigo-100"
+                        >
+                          <Eye className="h-3 w-3" aria-hidden="true" />
+                          Open Before / After PHI Redaction Diff Below
+                        </button>
+                      </div>
+                    )}
+
+                    {selectedTraceNode === "synthesize_coordination_brief" && (
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-1">
+                          <p>
+                            <span className="font-medium text-slate-900">Provider / Model:</span>{" "}
+                            <span className="font-mono text-purple-800">
+                              {aiMetadata
+                                ? `${aiMetadata.provider} · ${aiMetadata.model}`
+                                : "openrouter"}
+                            </span>
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            {streamTokenCount > 0
+                              ? `Streamed ${streamTokenCount} token chunks`
+                              : "Synthesized via fallback"}
+                            {streamDurationMs !== null ? ` in ${(streamDurationMs / 1000).toFixed(1)}s` : ""}
+                            {" · "}Zero PHI transmitted · Clinician approval required.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHandoffDraft(specialistHandoff ?? displayHandoff ?? "");
+                            setIsEditingHandoff(true);
+                            setSelectedTraceNode(null);
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-medium text-teal-800 hover:bg-teal-100"
+                        >
+                          <Pencil className="h-3 w-3" aria-hidden="true" />
+                          Edit Handoff Draft
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -912,7 +1345,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     className="inline-flex items-center gap-1 rounded border border-indigo-200 bg-white px-2 py-1 text-[11px] font-medium text-indigo-800 hover:bg-indigo-50"
                   >
                     <Eye className="h-3 w-3" />
-                    {showPayload ? "Hide AI Payload" : "Inspect Exact AI Payload"}
+                    {showPayload ? "Hide Redaction Diff" : "Inspect Before / After PHI Diff"}
                   </button>
                 </div>
 
@@ -936,9 +1369,85 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 </div>
 
                 {showPayload && (
-                  <pre className="mt-3 overflow-x-auto rounded bg-slate-900 p-3 font-mono text-[11px] text-emerald-300">
-                    {JSON.stringify(privacyReport.payload, null, 2)}
-                  </pre>
+                  <div className="mt-3 space-y-2.5">
+                    <div
+                      role="tablist"
+                      aria-label="PHI redaction inspection view"
+                      className="inline-flex rounded-lg border border-indigo-200 bg-white p-0.5"
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={privacyTab === "outbound"}
+                        onClick={() => setPrivacyTab("outbound")}
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                          privacyTab === "outbound"
+                            ? "bg-emerald-600 text-white"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        Outbound AI JSON (0 PHI)
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={privacyTab === "redacted"}
+                        onClick={() => setPrivacyTab("redacted")}
+                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                          privacyTab === "redacted"
+                            ? "bg-indigo-600 text-white"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        Stripped Locally (UAE-Only)
+                      </button>
+                    </div>
+
+                    {privacyTab === "outbound" ? (
+                      <pre className="overflow-x-auto rounded bg-slate-900 p-3 font-mono text-[11px] text-emerald-300">
+                        {JSON.stringify(privacyReport.payload, null, 2)}
+                      </pre>
+                    ) : (
+                      <div className="rounded-lg border border-indigo-200 bg-white p-3 font-mono text-[11px]">
+                        <p className="mb-2 font-sans text-[11px] font-medium text-indigo-900">
+                          Blocked before egress — stayed inside Neon Postgres (UAE boundary):
+                        </p>
+                        <ul className="space-y-1.5">
+                          <li className="flex flex-wrap items-center justify-between gap-2 rounded bg-rose-50/70 px-2.5 py-1">
+                            <span className="text-slate-500">patient_name</span>
+                            <span className="text-rose-700 line-through">
+                              {patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)"}
+                            </span>
+                          </li>
+                          <li className="flex flex-wrap items-center justify-between gap-2 rounded bg-rose-50/70 px-2.5 py-1">
+                            <span className="text-slate-500">patient_id</span>
+                            <span className="text-rose-700 line-through">
+                              {patient?.patient_id ?? "PAT-AE-4092"}
+                            </span>
+                          </li>
+                          <li className="flex flex-wrap items-center justify-between gap-2 rounded bg-emerald-50/80 px-2.5 py-1">
+                            <span className="text-slate-500">replaced with → case_token</span>
+                            <span className="font-semibold text-emerald-800">
+                              {String(privacyReport.payload.case_token ?? "ANON-CASE")}
+                            </span>
+                          </li>
+                          {obligations.map((obl) => (
+                            <li
+                              key={obl.id}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded bg-rose-50/70 px-2.5 py-1"
+                            >
+                              <span className="text-slate-500">
+                                {obl.id}.evidence_source
+                              </span>
+                              <span className="text-rose-700 line-through">
+                                {obl.evidence_source}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             )}
