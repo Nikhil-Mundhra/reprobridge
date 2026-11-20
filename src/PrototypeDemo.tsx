@@ -4,9 +4,11 @@ import {
   ArrowLeft,
   ArrowRight,
   Baby,
+  Building2,
   Check,
   CheckCircle2,
   ClipboardList,
+  Clock,
   Code2,
   Copy,
   Cpu,
@@ -23,7 +25,9 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Send,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Upload,
   X,
@@ -293,13 +297,24 @@ const SYNTHETIC_FHIR_RECORDS: Record<string, Record<string, unknown>> = {
 
 const AUDIT_EVENT_META: Record<
   string,
-  { label: string; dot: string; tag: string; category: "closure" | "ai" | "transition" | "intake" }
+  {
+    label: string;
+    dot: string;
+    tag: string;
+    category: "closure" | "ai" | "transition" | "intake" | "safety";
+  }
 > = {
   EVIDENCE_VERIFIED_CLOSURE: {
     label: "Verified Closure",
     dot: "bg-emerald-500",
     tag: "bg-emerald-50 text-emerald-800 border-emerald-200",
     category: "closure",
+  },
+  CLINICAL_SAFETY_BLOCKED: {
+    label: "Safety Guard Blocked",
+    dot: "bg-rose-600",
+    tag: "bg-rose-50 text-rose-800 border-rose-200",
+    category: "safety",
   },
   AGENT_BRIEF_GENERATED: {
     label: "AI Brief (0 PHI)",
@@ -332,6 +347,217 @@ const AUDIT_EVENT_META: Record<
     category: "intake",
   },
 };
+
+interface FacilityStage {
+  stageIndex: 0 | 1 | 2;
+  dayTag: string;
+  facility: string;
+  emrSystem: string;
+  stageLabel: string;
+  siloRisk: string;
+  bridgedOutcome: string;
+}
+
+const FACILITY_CONTINUITY_STAGES: FacilityStage[] = [
+  {
+    stageIndex: 0,
+    dayTag: "Day 0",
+    facility: "Mubadala Primary Care",
+    emrSystem: "Epic Ambulatory",
+    stageLabel: "Preconception",
+    siloRisk: "TSH 4.8 & Rubella IgG− sit inside an encounter PDF.",
+    bridgedOutcome: "Logged as 2 rule-versioned obligations on Malaffi Passport.",
+  },
+  {
+    stageIndex: 1,
+    dayTag: "Day 142",
+    facility: "Corniche Antenatal OB-GYN",
+    emrSystem: "Oracle Health / Malaffi",
+    stageLabel: "Antenatal (Trimester 1)",
+    siloRisk: "New clinic sees today's pregnancy test—prior clinic labs missed.",
+    bridgedOutcome: "Inherits 2 silent gaps: escalates TSH (≤ 72h) & locks live MMR.",
+  },
+  {
+    stageIndex: 2,
+    dayTag: "Day 410",
+    facility: "Abu Dhabi Maternity Ward",
+    emrSystem: "Inpatient Discharge EMR",
+    stageLabel: "Postpartum",
+    siloRisk: "9-month deferred vaccine forgotten at hospital discharge.",
+    bridgedOutcome: "Delivery lifts lock—auto-wakes MMR for pre-discharge closure.",
+  },
+];
+
+function getClinicalSlaMeta(obl: Obligation): {
+  windowLabel: string;
+  escalationNote: string;
+  badgeClass: string;
+} {
+  if (obl.status === "VERIFIED_CLOSED") {
+    return {
+      windowLabel: "Evidence Verified & Closed",
+      escalationNote: "Immutable closure recorded in Neon governance audit trail",
+      badgeClass: "border-emerald-200 bg-emerald-50/80 text-emerald-900",
+    };
+  }
+  if (obl.status === "DEFERRED_TO_POSTPARTUM") {
+    return {
+      windowLabel: "Locked Until Delivery",
+      escalationNote: "Contraindication guard active · Auto-queues pre-discharge order set postpartum",
+      badgeClass: "border-indigo-200 bg-indigo-50/80 text-indigo-900",
+    };
+  }
+  if (obl.status === "ESCALATED_FOR_REVIEW") {
+    if (obl.life_stage === "Postpartum") {
+      return {
+        windowLabel: "Pre-Discharge SLA: ≤ 48h",
+        escalationNote: "Auto-escalates to Postpartum OB Lead before maternal discharge if unverified",
+        badgeClass: "border-rose-200 bg-rose-50/80 text-rose-900",
+      };
+    }
+    return {
+      windowLabel: "Trimester 1 SLA: ≤ 72h",
+      escalationNote: "Auto-escalates to Maternal-Fetal Medicine Lead if repeat labs remain unverified",
+      badgeClass: "border-rose-200 bg-rose-50/80 text-rose-900",
+    };
+  }
+  if (obl.priority === "HIGH" || obl.priority === "URGENT") {
+    return {
+      windowLabel: "Preconception SLA: ≤ 14 days",
+      escalationNote: "Auto-escalates to URGENT immediately if pregnancy transition fires first",
+      badgeClass: "border-amber-200 bg-amber-50/80 text-amber-900",
+    };
+  }
+  return {
+    windowLabel: "Preventive Window: Pre-Conception",
+    escalationNote: "Preserved across facilities; carries forward automatically on life-stage change",
+    badgeClass: "border-slate-200 bg-slate-50 text-slate-700",
+  };
+}
+
+function buildOutboundFhirBundle(
+  obligations: Obligation[],
+  currentLifeStage: string,
+  agentSummary: string | null,
+  handoffText: string | null
+): Record<string, unknown> {
+  const patient = obligations[0];
+  const patientId = patient?.patient_id ?? "PAT-AE-4092";
+  const patientName = patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)";
+  const timestamp = new Date().toISOString();
+  const handoffItems = handoffText ? parseHandoffItems(handoffText) : [];
+
+  const carePlanEntry = {
+    fullUrl: `urn:uuid:reprobridge-careplan-${patientId.toLowerCase()}`,
+    resource: {
+      resourceType: "CarePlan",
+      id: `rb-careplan-${patientId.toLowerCase()}`,
+      status: "active",
+      intent: "plan",
+      title: `ReproBridge Longitudinal Care Plan · ${currentLifeStage}`,
+      description:
+        agentSummary ??
+        `Coordinated reproductive & preventive care plan across life-stage transitions (${currentLifeStage}).`,
+      subject: {
+        reference: `Patient/${patientId}`,
+        display: patientName,
+      },
+      created: timestamp,
+      author: {
+        display: "ReproBridge Deterministic Rules + Clinician-Reviewed Handoff",
+      },
+      activity: obligations.map((obl) => ({
+        detail: {
+          status:
+            obl.status === "VERIFIED_CLOSED"
+              ? "completed"
+              : obl.status === "DEFERRED_TO_POSTPARTUM"
+                ? "on-hold"
+                : "in-progress",
+          description: `${obl.id}: ${obl.title} [${obl.rule_version}]`,
+        },
+      })),
+    },
+    request: {
+      method: "PUT",
+      url: `CarePlan/rb-careplan-${patientId.toLowerCase()}`,
+    },
+  };
+
+  const taskEntries = obligations.map((obl) => ({
+    fullUrl: `urn:uuid:reprobridge-task-${obl.id.toLowerCase()}`,
+    resource: {
+      resourceType: "Task",
+      id: `rb-task-${obl.id.toLowerCase()}`,
+      status:
+        obl.status === "VERIFIED_CLOSED"
+          ? "completed"
+          : obl.status === "DEFERRED_TO_POSTPARTUM"
+            ? "on-hold"
+            : "requested",
+      intent: "order",
+      priority:
+        obl.priority === "URGENT"
+          ? "stat"
+          : obl.priority === "HIGH"
+            ? "urgent"
+            : "routine",
+      description: obl.title,
+      focus: {
+        display: obl.evidence_source,
+      },
+      for: {
+        reference: `Patient/${patientId}`,
+        display: patientName,
+      },
+      authoredOn: timestamp,
+      owner: {
+        display: obl.owner,
+      },
+      reasonCode: {
+        text: `${obl.rule_version} · ${obl.life_stage}`,
+      },
+      note: [
+        { text: obl.rationale },
+        ...(obl.verified_by
+          ? [{ text: `Evidence-verified closure by ${obl.verified_by}: ${obl.closure_evidence ?? ""}` }]
+          : []),
+      ],
+    },
+    request: {
+      method: "PUT",
+      url: `Task/rb-task-${obl.id.toLowerCase()}`,
+    },
+  }));
+
+  return {
+    resourceType: "Bundle",
+    id: `reprobridge-emr-push-${timestamp.slice(0, 10)}`,
+    type: "transaction",
+    timestamp,
+    meta: {
+      profile: ["http://hl7.org/fhir/StructureDefinition/Bundle"],
+      source: "urn:reprobridge:malaffi-hie:smart-on-fhir-layer",
+      tag: [
+        {
+          system: "urn:reprobridge:governance",
+          code: "UAE_PHI_LOCAL_ONLY",
+          display: "Generated locally inside UAE boundary for EMR write-back",
+        },
+      ],
+    },
+    extension:
+      handoffItems.length > 0
+        ? [
+            {
+              url: "urn:reprobridge:extension:clinician-handoff-checklist",
+              valueString: handoffItems.map((item, idx) => `${idx + 1}. ${item}`).join(" | "),
+            },
+          ]
+        : undefined,
+    entry: [carePlanEntry, ...taskEntries],
+  };
+}
 
 const PRIORITY_STYLES: Record<string, string> = {
   URGENT: "bg-rose-100 text-rose-800 border-rose-200",
@@ -471,6 +697,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [manualIncomingResult, setManualIncomingResult] = useState("");
   const [tableRawText, setTableRawText] = useState(SAMPLE_IMPORT_CSV);
   const [intakeSubmitting, setIntakeSubmitting] = useState(false);
+
+  const [testingSafetyId, setTestingSafetyId] = useState<string | null>(null);
+  const [safetyBlockFeedback, setSafetyBlockFeedback] = useState<
+    Record<string, { detail: string; status: number; ruleVersion: string }>
+  >({});
+  const [showFhirExportModal, setShowFhirExportModal] = useState(false);
+  const [fhirCopyState, setFhirCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   async function loadData() {
     try {
@@ -649,6 +882,8 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
       if (e.key !== "Escape") return;
       if (verifyTarget) {
         setVerifyTarget(null);
+      } else if (showFhirExportModal) {
+        setShowFhirExportModal(false);
       } else if (showIntakeModal) {
         setShowIntakeModal(false);
       } else if (selectedTraceNode) {
@@ -657,7 +892,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     };
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [verifyTarget, showIntakeModal, selectedTraceNode]);
+  }, [verifyTarget, showFhirExportModal, showIntakeModal, selectedTraceNode]);
 
   useEffect(() => {
     return () => {
@@ -704,6 +939,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setCheckedHandoff({});
     setIsEditingHandoff(false);
     setSelectedTraceNode(null);
+    setSafetyBlockFeedback({});
     setAgentSummary(null);
     setSpecialistHandoff(null);
     setAiMetadata(null);
@@ -813,6 +1049,61 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     }
   }
 
+  async function handleTestSafetyGuard(obl: Obligation) {
+    setTestingSafetyId(obl.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/obligations/${obl.id}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clinician_name: "Dr. Layla Al-Hashimi (OB-GYN · Safety Guard Test)",
+          closure_evidence: "Simulated premature live-vaccine closure attempt during pregnancy.",
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        setSafetyBlockFeedback((prev) => ({
+          ...prev,
+          [obl.id]: {
+            status: res.status,
+            ruleVersion: obl.rule_version,
+            detail:
+              body.detail ||
+              "Clinical safety guard blocked premature closure during pregnancy.",
+          },
+        }));
+        await loadData();
+      } else if (!res.ok) {
+        setError(body.detail || `Unexpected response (HTTP ${res.status})`);
+      }
+    } catch {
+      setError("Unable to reach ReproBridge API to test safety guard.");
+    } finally {
+      setTestingSafetyId(null);
+    }
+  }
+
+  async function handleCopyFhirBundle(jsonText: string) {
+    try {
+      await navigator.clipboard.writeText(jsonText);
+      setFhirCopyState("copied");
+    } catch {
+      setFhirCopyState("failed");
+    }
+    window.setTimeout(() => setFhirCopyState("idle"), 2000);
+  }
+
+  function handleDownloadFhirBundle(jsonText: string) {
+    const blob = new Blob([jsonText], { type: "application/fhir+json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `reprobridge-fhir-r4-bundle-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function handleReset() {
     setLoading(true);
     setAgentSummary(null);
@@ -821,6 +1112,8 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setPrivacyReport(null);
     setShowPayload(false);
     setExpandedFhirId(null);
+    setSafetyBlockFeedback({});
+    setShowFhirExportModal(false);
     setTrace([]);
     setError(null);
     try {
@@ -878,6 +1171,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-medium text-teal-800"
+              title="Embedded coordination layer designed for Epic, Oracle Health, and Abu Dhabi Malaffi HIE"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              SMART on FHIR · Malaffi HIE
+            </span>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">
               <Lock className="h-3.5 w-3.5" />
               UAE PHI Local-Only
@@ -984,6 +1284,74 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 Reset Demo
               </button>
             </div>
+          </div>
+
+          {/* Cross-Facility Care Continuity Strip (The EMR Blind Spot) */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                <Building2 className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
+                Cross-Facility Care Continuity (3 Separate EMRs · 1 Longitudinal Passport)
+              </div>
+              <span className="rounded-full border border-teal-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-teal-800">
+                EMR Silo Gap Bridged via Malaffi HIE
+              </span>
+            </div>
+
+            <ol className="mt-2.5 grid gap-2.5 md:grid-cols-3">
+              {FACILITY_CONTINUITY_STAGES.map((stage) => {
+                const currentFacilityIdx = isPostpartum ? 2 : isAntenatal ? 1 : 0;
+                const isDone = stage.stageIndex < currentFacilityIdx;
+                const isCurrent = stage.stageIndex === currentFacilityIdx;
+
+                return (
+                  <li
+                    key={stage.dayTag}
+                    className={`rounded-lg border p-3 text-xs transition ${
+                      isCurrent
+                        ? "border-teal-400 bg-white shadow-xs ring-1 ring-teal-200/70"
+                        : isDone
+                          ? "border-emerald-200 bg-emerald-50/40 text-slate-700"
+                          : "border-slate-200/80 bg-white/60 text-slate-500"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        {stage.dayTag} · {stage.stageLabel}
+                      </span>
+                      {isCurrent ? (
+                        <span className="rounded-full bg-teal-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                          Active
+                        </span>
+                      ) : isDone ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                          <Check className="h-2.5 w-2.5" aria-hidden="true" />
+                          Carried Forward
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                          Upcoming
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="mt-1.5 font-semibold text-slate-900">{stage.facility}</p>
+                    <p className="font-mono text-[10px] text-slate-500">{stage.emrSystem}</p>
+
+                    <div className="mt-2 space-y-1 border-t border-slate-100 pt-2 text-[11px] leading-snug">
+                      <p className="text-slate-500">
+                        <span className="font-semibold text-rose-700">Without layer:</span>{" "}
+                        {stage.siloRisk}
+                      </p>
+                      <p className={isCurrent || isDone ? "text-teal-900" : "text-slate-600"}>
+                        <span className="font-semibold text-teal-700">ReproBridge:</span>{" "}
+                        {stage.bridgedOutcome}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
           </div>
 
           {!isPostpartum && (
@@ -1188,6 +1556,15 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
                       {!isStreaming && (
                         <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setShowFhirExportModal(true)}
+                            className="inline-flex min-h-6 min-w-6 items-center gap-1 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-800 transition hover:bg-indigo-100"
+                          >
+                            <Send className="h-3 w-3" aria-hidden="true" />
+                            Push to EMR (FHIR R4)
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => {
@@ -1793,17 +2170,28 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 Clinical Obligation Passport ({obligations.length})
               </h3>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setIntakeTab("manual");
-                setShowIntakeModal(true);
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-800 shadow-xs transition hover:bg-teal-50"
-            >
-              <Upload className="h-3.5 w-3.5" aria-hidden="true" />
-              Import Table / Add Finding
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFhirExportModal(true)}
+                disabled={obligations.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-800 shadow-xs transition hover:bg-indigo-50 disabled:opacity-50"
+              >
+                <Send className="h-3.5 w-3.5" aria-hidden="true" />
+                EMR Write-Back (FHIR R4)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIntakeTab("manual");
+                  setShowIntakeModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-medium text-teal-800 shadow-xs transition hover:bg-teal-50"
+              >
+                <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                Import Table / Add Finding
+              </button>
+            </div>
           </div>
 
           {initialLoading && obligations.length === 0 && (
@@ -1829,6 +2217,8 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           {obligations.map((obl) => {
             const fhirRecord = SYNTHETIC_FHIR_RECORDS[obl.id];
             const isFhirOpen = expandedFhirId === obl.id;
+            const slaMeta = getClinicalSlaMeta(obl);
+            const safetyBlock = safetyBlockFeedback[obl.id];
 
             return (
               <article
@@ -1860,10 +2250,22 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                   </div>
 
                   {obl.status === "DEFERRED_TO_POSTPARTUM" ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800">
-                      <Lock className="h-3.5 w-3.5" />
-                      Contraindicated in Pregnancy — Auto-Queued for Postpartum
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800">
+                        <Lock className="h-3.5 w-3.5" />
+                        Contraindicated in Pregnancy — Auto-Queued for Postpartum
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleTestSafetyGuard(obl)}
+                        disabled={testingSafetyId === obl.id || loading}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                        title="Demonstrate the deterministic HTTP 409 safety guard blocking premature closure during pregnancy"
+                      >
+                        <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                        {testingSafetyId === obl.id ? "Testing Guard…" : "Test Safety Guard"}
+                      </button>
+                    </div>
                   ) : (
                     obl.status !== "VERIFIED_CLOSED" && (
                       <button
@@ -1877,6 +2279,56 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                     )
                   )}
                 </div>
+
+                {/* Clinical SLA Window & Escalation Path */}
+                <div
+                  className={`mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${slaMeta.badgeClass}`}
+                >
+                  <span className="inline-flex items-center gap-1.5 font-semibold">
+                    <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    {slaMeta.windowLabel}
+                  </span>
+                  <span className="text-[11px] opacity-90">{slaMeta.escalationNote}</span>
+                </div>
+
+                {safetyBlock && (
+                  <div
+                    role="alert"
+                    className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-950"
+                  >
+                    <div className="flex items-start gap-2">
+                      <ShieldAlert
+                        className="mt-0.5 h-4 w-4 shrink-0 text-rose-600"
+                        aria-hidden="true"
+                      />
+                      <div>
+                        <p className="font-semibold text-rose-900">
+                          Deterministic Safety Guard Intercepted (HTTP {safetyBlock.status} ·{" "}
+                          <span className="font-mono">{safetyBlock.ruleVersion}</span>)
+                        </p>
+                        <p className="mt-0.5 leading-relaxed text-rose-800">{safetyBlock.detail}</p>
+                        <p className="mt-1 text-[11px] font-medium text-rose-700">
+                          Logged as <span className="font-mono">CLINICAL_SAFETY_BLOCKED</span> in
+                          the Auditable Governance Log below.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSafetyBlockFeedback((prev) => {
+                          const next = { ...prev };
+                          delete next[obl.id];
+                          return next;
+                        })
+                      }
+                      aria-label={`Dismiss safety guard alert for ${obl.id}`}
+                      className="rounded p-1 text-rose-500 hover:bg-rose-100 hover:text-rose-800"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
 
                 <p className="mt-3 text-sm leading-relaxed text-slate-600">{obl.rationale}</p>
 
@@ -2000,6 +2452,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                       className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:border-teal-500 focus:outline-none"
                     >
                       <option value="ALL">All Events</option>
+                      <option value="safety">Safety Guard Blocks</option>
                       <option value="closure">Clinician Closures</option>
                       <option value="transition">Life-Stage Rules</option>
                       <option value="ai">AI Briefs (0 PHI)</option>
@@ -2578,6 +3031,101 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           </div>
         </div>
       )}
+
+      {/* Outbound HL7 FHIR R4 EMR Write-Back Modal (CarePlan + Task Transaction Bundle) */}
+      {showFhirExportModal && (() => {
+        const bundle = buildOutboundFhirBundle(
+          obligations,
+          currentLifeStage,
+          displaySummary,
+          displayHandoff
+        );
+        const bundleJson = JSON.stringify(bundle, null, 2);
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fhir-export-modal-title"
+          >
+            <div className="flex max-h-[90dvh] w-full max-w-2xl flex-col rounded-xl bg-white p-6 shadow-xl">
+              <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-indigo-700">
+                    Bidirectional EMR Interoperability · SMART on FHIR / Malaffi HIE
+                  </p>
+                  <h3
+                    id="fhir-export-modal-title"
+                    className="mt-1 text-lg font-semibold text-slate-900"
+                  >
+                    Outbound HL7 FHIR R4 Transaction Bundle
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Writes 1 <span className="font-mono font-medium">CarePlan</span> +{" "}
+                    {obligations.length} <span className="font-mono font-medium">Task</span>{" "}
+                    resource(s) back into Epic / Oracle Health / Malaffi inside the UAE boundary so
+                    clinicians never rely on a standalone portal.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFhirExportModal(false)}
+                  aria-label="Close FHIR R4 export dialog"
+                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-0.5 font-mono text-[11px] font-medium text-teal-800">
+                    FHIR R4 · Bundle/transaction
+                  </span>
+                  <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 font-mono text-[11px] font-medium text-indigo-800">
+                    {currentLifeStage}
+                  </span>
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 font-mono text-[11px] font-medium text-emerald-800">
+                    UAE Local Write-Back
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyFhirBundle(bundleJson)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                  >
+                    {fhirCopyState === "copied" ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                    {fhirCopyState === "copied"
+                      ? "Copied FHIR JSON"
+                      : fhirCopyState === "failed"
+                        ? "Copy Failed"
+                        : "Copy Bundle"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadFhirBundle(bundleJson)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-indigo-700"
+                  >
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    Download JSON
+                  </button>
+                </div>
+              </div>
+
+              <pre className="mt-3 min-h-0 flex-1 overflow-auto rounded-lg bg-slate-900 p-4 font-mono text-[11px] leading-relaxed text-sky-200">
+                {bundleJson}
+              </pre>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

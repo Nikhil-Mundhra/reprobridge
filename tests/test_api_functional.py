@@ -64,7 +64,7 @@ def test_full_six_step_functional_flow(monkeypatch):
     assert mcp_body["result"]["isError"] is False
     assert "PAT-AE-4092" not in json.dumps(mcp_body)
 
-    # 5. Clinical safety guard blocks closing OBL-102 during pregnancy
+    # 5. Clinical safety guard blocks closing OBL-102 during pregnancy & records audit event
     blocked = client.post(
         "/api/obligations/OBL-102/verify",
         json={
@@ -74,6 +74,11 @@ def test_full_six_step_functional_flow(monkeypatch):
     )
     assert blocked.status_code == 409
     assert "contraindicated" in blocked.json()["detail"].lower()
+    audit_after_block = client.get("/api/obligations").json()["audit_events"]
+    assert any(
+        ev["event_type"] == "CLINICAL_SAFETY_BLOCKED" and ev["obligation_id"] == "OBL-102"
+        for ev in audit_after_block
+    )
 
     # 6. Evidence-verified clinician closure for OBL-101
     verify = client.post(

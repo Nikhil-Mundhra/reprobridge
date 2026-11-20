@@ -417,6 +417,16 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
     if existing is None:
         raise HTTPException(status_code=404, detail="Clinical obligation not found")
     if existing["status"] == "DEFERRED_TO_POSTPARTUM":
+        rule_ver = existing.get("rule_version") or "RB-IMMUNE-v1.2.1"
+        append_audit_event(
+            event_type="CLINICAL_SAFETY_BLOCKED",
+            actor=f"SafetyGuard ({rule_ver})",
+            summary=(
+                f"Blocked premature closure of {obligation_id} requested by {body.clinician_name}: "
+                "live-vaccine obligation is contraindicated during pregnancy and remains queued for postpartum."
+            ),
+            obligation_id=obligation_id,
+        )
         raise HTTPException(
             status_code=409,
             detail=(
