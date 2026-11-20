@@ -1,4 +1,4 @@
-import { Activity, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 interface TutorialHomeProps {
   onLaunchDemo: () => void;
@@ -89,15 +89,16 @@ export default function TutorialHome({ onLaunchDemo }: TutorialHomeProps) {
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur-xs">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-600 text-white">
-              <Activity className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-base font-semibold leading-tight text-slate-900">
-                ReproBridge
-              </p>
-              <p className="text-xs text-slate-500">6-Step Interactive Walkthrough</p>
-            </div>
+            <img
+              src="/reprobridge-logo-full.png"
+              alt="ReproBridge — Connected care for women"
+              width={160}
+              height={50}
+              className="h-10 w-auto object-contain"
+            />
+            <span className="hidden border-l border-slate-200 pl-3 text-xs font-medium text-slate-500 sm:inline">
+              6-Step Interactive Walkthrough
+            </span>
           </div>
 
           <button
@@ -173,13 +174,22 @@ export default function TutorialHome({ onLaunchDemo }: TutorialHomeProps) {
         </ol>
 
         <div className="mt-12 flex flex-col items-center justify-between gap-4 rounded-2xl border border-teal-200 bg-teal-50 p-6 sm:flex-row sm:p-8">
-          <div>
-            <p className="text-base font-semibold text-teal-950">
-              Ready to run the 6 steps live?
-            </p>
-            <p className="mt-1 text-sm text-teal-800">
-              Connected to Neon PostgreSQL and OpenRouter with the UAE Privacy Firewall active.
-            </p>
+          <div className="flex items-center gap-4">
+            <img
+              src="/reprobridge-mark.png"
+              alt=""
+              width={48}
+              height={48}
+              className="hidden h-12 w-12 shrink-0 object-contain sm:block"
+            />
+            <div>
+              <p className="text-base font-semibold text-teal-950">
+                Ready to run the 6 steps live?
+              </p>
+              <p className="mt-1 text-sm text-teal-800">
+                Connected to Neon PostgreSQL and OpenRouter with the UAE Privacy Firewall active.
+              </p>
+            </div>
           </div>
           <button
             type="button"

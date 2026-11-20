@@ -1,10 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
-  Activity,
   ArrowLeft,
   ArrowRight,
   Baby,
-  Bot,
   Check,
   CheckCircle2,
   ClipboardList,
@@ -583,15 +581,16 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
               <ArrowLeft className="h-3.5 w-3.5" />
               Tutorial
             </button>
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-600 text-white">
-              <Activity className="h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold text-slate-900">ReproBridge</h1>
-              <p className="text-xs text-slate-500">
-                Clinical Obligation Passport · Preconception → Antenatal → Postpartum Continuity
-              </p>
-            </div>
+            <img
+              src="/reprobridge-logo-full.png"
+              alt="ReproBridge — Connected care for women"
+              width={154}
+              height={48}
+              className="h-9 w-auto object-contain"
+            />
+            <span className="hidden border-l border-slate-200 pl-3 text-xs text-slate-500 md:inline">
+              Clinical Obligation Passport · Preconception → Antenatal → Postpartum
+            </span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -760,19 +759,21 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-start gap-3">
                 {/* Floating agent avatar that reacts while thinking/streaming */}
-                <div
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
-                    isStreaming
-                      ? "rb-float-avatar border-teal-300 bg-teal-600 text-white shadow-xs"
-                      : "border-teal-200 bg-white text-teal-700"
-                  }`}
-                >
-                  {isStreaming ? (
-                    <Bot className="h-4.5 w-4.5" />
-                  ) : (
-                    <ShieldAlert className="h-4 w-4" />
-                  )}
-                </div>
+                  <div
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                      isStreaming
+                        ? "rb-float-avatar border-teal-300 bg-white shadow-xs"
+                        : "border-teal-200 bg-white"
+                    }`}
+                  >
+                    <img
+                      src="/reprobridge-mark.png"
+                      alt=""
+                      width={26}
+                      height={26}
+                      className="h-6.5 w-6.5 object-contain"
+                    />
+                  </div>
 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
