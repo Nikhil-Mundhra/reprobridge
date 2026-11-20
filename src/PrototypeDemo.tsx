@@ -207,6 +207,8 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         const data = await oRes.json();
         setObligations(data.obligations ?? []);
         setAuditEvents(data.audit_events ?? []);
+      } else {
+        setError(`ReproBridge API returned HTTP ${oRes.status} while loading obligations.`);
       }
     } catch {
       setError("Unable to reach ReproBridge API. Start FastAPI or deploy on Vercel.");
@@ -234,7 +236,12 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setError(null);
     try {
       const res = await fetch(endpoint, { method: "POST" });
-      if (!res.ok) throw new Error("Transition request failed");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(
+          errBody.detail || `Transition request failed (HTTP ${res.status})`
+        );
+      }
       const data = await res.json();
       setObligations(data.obligations ?? []);
       setAuditEvents(data.audit_events ?? []);
