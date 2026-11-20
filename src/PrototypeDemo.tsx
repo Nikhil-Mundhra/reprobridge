@@ -1,5 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { handleSpatialKeyDown } from "./spatialNav";
+import ClinicalDocumentsDrawer, {
+  getDefaultDocIdForObligation,
+} from "./ClinicalDocumentsDrawer";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,6 +19,7 @@ import {
   Download,
   Eye,
   FileCheck2,
+  FileText,
   GitBranch,
   Info,
   Lock,
@@ -651,6 +655,16 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   >({});
   const [showFhirExportModal, setShowFhirExportModal] = useState(false);
   const [fhirCopyState, setFhirCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [docsDrawerOpen, setDocsDrawerOpen] = useState(false);
+  const [docsInitialId, setDocsInitialId] = useState<string | null>(null);
+
+  function openClinicalDocuments(docId?: string | null) {
+    setDocsInitialId(docId ?? null);
+    setDocsDrawerOpen(true);
+  }
+
+  const totalClinicalDocCount =
+    5 + obligations.filter((o) => o.id !== "OBL-101" && o.id !== "OBL-102").length;
 
   async function loadData() {
     try {
@@ -826,7 +840,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
   useEffect(() => {
     const onEscape = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || docsDrawerOpen) return;
       if (verifyTarget) {
         setVerifyTarget(null);
       } else if (showFhirExportModal) {
@@ -839,7 +853,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     };
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
-  }, [verifyTarget, showFhirExportModal, showIntakeModal, selectedTraceNode]);
+  }, [docsDrawerOpen, verifyTarget, showFhirExportModal, showIntakeModal, selectedTraceNode]);
 
   useEffect(() => {
     return () => {
@@ -1142,6 +1156,15 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                 ? `Neon Postgres (${health.database.branch ?? "production"})`
                 : "Synthetic Fallback Mode"}
             </span>
+            <button
+              type="button"
+              onClick={() => openClinicalDocuments()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-800 shadow-2xs transition hover:border-teal-400 hover:bg-teal-50 hover:text-teal-900"
+              title="Open clinician-only synthetic source documents (excluded from AI egress)"
+            >
+              <FileText className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
+              Clinical Docs ({totalClinicalDocCount})
+            </button>
           </div>
         </div>
       </header>
@@ -2268,8 +2291,16 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                   </div>
                 </dl>
 
-                {fhirRecord && (
-                  <div className="mt-3">
+                <div className="mt-3 flex flex-wrap items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => openClinicalDocuments(getDefaultDocIdForObligation(obl.id))}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-700 hover:text-indigo-900"
+                  >
+                    <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                    View Clinical Report (Clinician Ref)
+                  </button>
+                  {fhirRecord && (
                     <button
                       type="button"
                       onClick={() => setExpandedFhirId(isFhirOpen ? null : obl.id)}
@@ -2280,12 +2311,12 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
                         ? "Hide HL7 FHIR R4 Source Record"
                         : "Inspect HL7 FHIR R4 Source Record"}
                     </button>
-                    {isFhirOpen && (
-                      <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-sky-200">
-                        {JSON.stringify(fhirRecord, null, 2)}
-                      </pre>
-                    )}
-                  </div>
+                  )}
+                </div>
+                {fhirRecord && isFhirOpen && (
+                  <pre className="mt-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-sky-200">
+                    {JSON.stringify(fhirRecord, null, 2)}
+                  </pre>
                 )}
 
                 {obl.verified_by && (
@@ -3046,6 +3077,32 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           </div>
         );
       })()}
+
+      {/* Persistent Right-Edge Side Tab for Clinician Source Documents */}
+      <button
+        type="button"
+        onClick={() => openClinicalDocuments()}
+        aria-label={`Open Clinical Source Documents (${totalClinicalDocCount} synthetic records)`}
+        className="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 flex-col items-center gap-2 rounded-l-xl border border-r-0 border-slate-300 bg-white/95 px-2.5 py-3.5 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur-xs transition hover:border-teal-400 hover:bg-teal-50 hover:text-teal-950 md:flex"
+      >
+        <FileText className="h-4 w-4 text-teal-700" aria-hidden="true" />
+        <span className="[writing-mode:vertical-rl] rotate-180 tracking-wide">
+          Clinical Docs
+        </span>
+        <span className="rounded-full bg-teal-600 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white">
+          {totalClinicalDocCount}
+        </span>
+      </button>
+
+      {/* Clinician-Only Clinical Documents Side Drawer (Zero AI Egress) */}
+      <ClinicalDocumentsDrawer
+        isOpen={docsDrawerOpen}
+        onClose={() => setDocsDrawerOpen(false)}
+        initialDocId={docsInitialId}
+        currentLifeStage={currentLifeStage}
+        obligations={obligations}
+        clinicianLabel={clinicianName}
+      />
     </div>
   );
 }

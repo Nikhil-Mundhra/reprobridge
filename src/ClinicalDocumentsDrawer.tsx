@@ -1,0 +1,1253 @@
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  Building2,
+  CheckCircle2,
+  EyeOff,
+  FileText,
+  FlaskConical,
+  Lock,
+  Printer,
+  Search,
+  ShieldCheck,
+  Stethoscope,
+  Syringe,
+  X,
+} from "lucide-react";
+import { handleSpatialKeyDown } from "./spatialNav";
+
+export interface DrawerObligationSummary {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  life_stage: string;
+  title: string;
+  rationale: string;
+  evidence_source: string;
+  rule_version: string;
+  owner: string;
+  status: string;
+  priority: string;
+  verified_by: string | null;
+  closure_evidence: string | null;
+}
+
+interface ClinicalDocumentsDrawerProps {
+  isOpen: boolean;
+  onClose: () => void;
+  initialDocId?: string | null;
+  currentLifeStage: string;
+  obligations: DrawerObligationSummary[];
+  clinicianLabel?: string;
+}
+
+type DocCategory = "lab" | "serology" | "ob_note" | "immunization" | "imported";
+
+interface AnalyteRow {
+  testName: string;
+  loinc: string;
+  value: string;
+  unit: string;
+  flag?: "HIGH" | "NON-IMMUNE" | "POSITIVE" | "NORMALIZED" | "NORMAL" | "ADMINISTERED";
+  referenceRange: string;
+  method?: string;
+  priorDelta?: string;
+  highlight?: boolean;
+}
+
+interface ClinicalDocument {
+  id: string;
+  linkedObligationId: string | null;
+  category: DocCategory;
+  stageTag: "Preconception" | "Antenatal" | "Postpartum";
+  dayTag: string;
+  shortTitle: string;
+  documentTitle: string;
+  facilityName: string;
+  facilitySubline: string;
+  emrSystem: string;
+  licenseCode: string;
+  accessionId: string;
+  encounterId: string;
+  fhirReference: string;
+  collectedAt: string;
+  receivedAt: string;
+  reportedAt: string;
+  specimenType: string;
+  orderingPhysician: string;
+  performingPhysician: string;
+  reportStatus: "FINAL" | "VERIFIED" | "AMENDED";
+  transferBanner?: string;
+  analytes: AnalyteRow[];
+  clinicalNotes: string[];
+  rxOrder?: {
+    medication: string;
+    sig: string;
+    prescriber: string;
+    dispenseStatus: string;
+  };
+  signatureBlock: {
+    signedBy: string;
+    credentials: string;
+    signedAt: string;
+    registryNote: string;
+  };
+  searchTokens: string;
+}
+
+// Lazy probe for discrete `display` transitions (modern-web-guidance: animate-to-from-top-layer)
+let cachedDisplayTransitionSupport: boolean | undefined;
+
+function canTransitionDisplay(): boolean {
+  if (cachedDisplayTransitionSupport !== undefined) return cachedDisplayTransitionSupport;
+  if (
+    typeof window === "undefined" ||
+    !window.CSS?.supports?.("transition-behavior", "allow-discrete") ||
+    !document.body
+  ) {
+    return false;
+  }
+  const probe = document.createElement("div");
+  probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
+  document.body.appendChild(probe);
+  getComputedStyle(probe).display;
+  probe.style.display = "none";
+  cachedDisplayTransitionSupport = getComputedStyle(probe).display === "block";
+  probe.remove();
+  return cachedDisplayTransitionSupport;
+}
+
+function supportsTopLayerExit(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean(window.CSS?.supports?.("overlay", "auto")) &&
+    canTransitionDisplay()
+  );
+}
+
+async function closeDialogWithAnimation(dialog: HTMLDialogElement): Promise<void> {
+  if (!dialog.open) return;
+  if (!supportsTopLayerExit()) {
+    dialog.setAttribute("data-closing", "");
+    const animations = dialog.getAnimations({ subtree: true });
+    if (animations.length > 0) {
+      await Promise.race([
+        Promise.allSettled(animations.map((a) => a.finished)),
+        new Promise((resolve) => window.setTimeout(resolve, 400)),
+      ]);
+    }
+    if (!dialog.hasAttribute("data-closing")) return;
+    dialog.removeAttribute("data-closing");
+  }
+  if (dialog.open) {
+    dialog.close();
+  }
+}
+
+/** Deterministic SVG Code-128 style barcode for realistic lab accession headers. */
+function AccessionBarcode({ value }: { value: string }) {
+  const bars = useMemo(() => {
+    const out: { x: number; w: number }[] = [];
+    let cursor = 0;
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      const pattern = [
+        (code % 2) + 1,
+        ((code >> 1) % 2) + 1,
+        ((code >> 2) % 3) + 1,
+        ((code >> 3) % 2) + 1,
+      ];
+      pattern.forEach((width, idx) => {
+        if (idx % 2 === 0) {
+          out.push({ x: cursor, w: width });
+        }
+        cursor += width + 1;
+      });
+    }
+    return { items: out, totalWidth: Math.max(cursor, 96) };
+  }, [value]);
+
+  return (
+    <div className="inline-flex flex-col items-end">
+      <svg
+        viewBox={`0 0 ${bars.totalWidth} 28`}
+        className="h-7 w-36 text-slate-900"
+        role="img"
+        aria-label={`Synthetic accession barcode ${value}`}
+      >
+        {bars.items.map((bar, idx) => (
+          <rect key={idx} x={bar.x} y={0} width={bar.w} height={28} fill="currentColor" />
+        ))}
+      </svg>
+      <span className="mt-0.5 font-mono text-[10px] tracking-wider text-slate-600">*{value}*</span>
+    </div>
+  );
+}
+
+const BASE_CLINICAL_DOCUMENTS: ClinicalDocument[] = [
+  {
+    id: "DOC-LAB-01",
+    linkedObligationId: "OBL-101",
+    category: "lab",
+    stageTag: "Preconception",
+    dayTag: "Day 0",
+    shortTitle: "Preconception Endocrine Lab (TSH 4.8)",
+    documentTitle: "CLINICAL CHEMISTRY & ENDOCRINOLOGY LABORATORY REPORT",
+    facilityName: "MUBADALA PRIMARY CARE DIAGNOSTICS",
+    facilitySubline: "Al Maryah Island · Abu Dhabi, UAE · ISO 15189 / CAP Synthetic Lab Layout",
+    emrSystem: "Epic Beaker · Malaffi HIE",
+    licenseCode: "DoH-SYN-MF4092",
+    accessionId: "ACC-2026-0914-8821",
+    encounterId: "ENC-MPC-2026-4410",
+    fhirReference: "Observation/obs-tsh-2026-09",
+    collectedAt: "14-Sep-2026 08:12 +04:00",
+    receivedAt: "14-Sep-2026 08:40 +04:00",
+    reportedAt: "14-Sep-2026 09:30 +04:00",
+    specimenType: "Serum (SST Gold Top · Fasting)",
+    orderingPhysician: "Dr. Tariq Al-Nuaimi, MRCGP (Family Medicine)",
+    performingPhysician: "Dr. Hessa Al-Dhaheri, FRCPath (Clinical Pathology)",
+    reportStatus: "FINAL",
+    analytes: [
+      {
+        testName: "Thyrotropin (TSH), Ultrasensitive",
+        loinc: "3016-3",
+        value: "4.80",
+        unit: "mIU/L",
+        flag: "HIGH",
+        referenceRange: "0.40 – 4.00 (Non-Pregnant) | < 2.50 (Trimester 1)",
+        method: "ECLIA (Cobas e801)",
+        highlight: true,
+      },
+      {
+        testName: "Free Thyroxine (Free T4)",
+        loinc: "3024-7",
+        value: "13.4",
+        unit: "pmol/L",
+        flag: "NORMAL",
+        referenceRange: "12.0 – 22.0",
+        method: "ECLIA",
+      },
+      {
+        testName: "Hemoglobin (Whole Blood)",
+        loinc: "718-7",
+        value: "12.8",
+        unit: "g/dL",
+        flag: "NORMAL",
+        referenceRange: "12.0 – 15.5",
+        method: "Photometry",
+      },
+      {
+        testName: "Hemoglobin A1c (NGSP)",
+        loinc: "4548-4",
+        value: "5.2",
+        unit: "%",
+        flag: "NORMAL",
+        referenceRange: "4.0 – 5.6",
+        method: "HPLC",
+      },
+    ],
+    clinicalNotes: [
+      "INTERPRETATION: Elevated serum TSH (4.80 mIU/L) with normal Free T4 (13.4 pmol/L) consistent with subclinical hypothyroidism.",
+      "PRECONCEPTION / PREGNANCY ADVISORY: For patients planning pregnancy or entering Trimester 1, TSH > 2.50 mIU/L warrants repeat thyroid panel and OB-GYN / Endocrinology evaluation per illustrative clinical guidance (Rule RB-THYROID-v1.4.0).",
+      "SPECIMEN INTEGRITY: No hemolysis, icterus, or lipemia detected. Automated validation passed.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Hessa Al-Dhaheri, MD, FRCPath",
+      credentials: "Consultant Clinical Pathologist · Synthetic Laboratory Director",
+      signedAt: "14-Sep-2026 09:30 +04:00",
+      registryNote: "Electronically verified & published to Abu Dhabi Malaffi HIE (Synthetic Feed)",
+    },
+    searchTokens: "tsh thyroid 4.8 hypothyroidism 3016-3 free t4 hba1c mubadala epic preconception obl-101",
+  },
+  {
+    id: "DOC-SER-02",
+    linkedObligationId: "OBL-102",
+    category: "serology",
+    stageTag: "Preconception",
+    dayTag: "Day 0",
+    shortTitle: "Preconception Serology (Rubella Non-Immune)",
+    documentTitle: "INFECTIOUS DISEASE & PRENATAL SEROLOGY DIAGNOSTIC REPORT",
+    facilityName: "MUBADALA PRIMARY CARE DIAGNOSTICS",
+    facilitySubline: "Reference Virology & Immunology Unit · Abu Dhabi, UAE",
+    emrSystem: "Epic Beaker · Malaffi HIE",
+    licenseCode: "DoH-SYN-MF4092",
+    accessionId: "ACC-2026-0822-3310",
+    encounterId: "ENC-MPC-2026-3908",
+    fhirReference: "DiagnosticReport/rep-rubella-2026-08",
+    collectedAt: "22-Aug-2026 09:05 +04:00",
+    receivedAt: "22-Aug-2026 09:35 +04:00",
+    reportedAt: "22-Aug-2026 11:15 +04:00",
+    specimenType: "Serum (SST Gold Top · Refrigerated)",
+    orderingPhysician: "Dr. Tariq Al-Nuaimi, MRCGP (Family Medicine)",
+    performingPhysician: "Dr. Khalid Al-Mazrouei, MD (Medical Microbiology)",
+    reportStatus: "FINAL",
+    analytes: [
+      {
+        testName: "Rubella Virus IgG Antibody (Quantitative)",
+        loinc: "25514-1",
+        value: "< 5.0",
+        unit: "IU/mL",
+        flag: "NON-IMMUNE",
+        referenceRange: "< 5.0 Non-Immune | 5.0–9.9 Equivocal | ≥ 10.0 Immune",
+        method: "CMIA (Architect)",
+        highlight: true,
+      },
+      {
+        testName: "Hepatitis B Surface Antigen (HBsAg)",
+        loinc: "5196-1",
+        value: "Non-Reactive",
+        unit: "S/CO 0.14",
+        flag: "NORMAL",
+        referenceRange: "Non-Reactive (< 1.00)",
+        method: "CMIA",
+      },
+      {
+        testName: "Varicella-Zoster Virus (VZV) IgG",
+        loinc: "15410-4",
+        value: "Positive (Immune)",
+        unit: "Index 3.42",
+        flag: "NORMAL",
+        referenceRange: "Immune (Index > 1.10)",
+        method: "EIA",
+      },
+      {
+        testName: "ABO Group & Rh(D) Typing",
+        loinc: "882-1",
+        value: "O Positive",
+        unit: "—",
+        flag: "NORMAL",
+        referenceRange: "Qualitative",
+        method: "Column Agglutination",
+      },
+    ],
+    clinicalNotes: [
+      "INTERPRETATION: Patient lacks protective IgG antibody titers against Rubella (< 5.0 IU/mL; Non-Immune).",
+      "CONTRAINDICATION WARNING: MMR is a live-attenuated vaccine. Administer prior to conception (avoid pregnancy for 28 days) OR, if pregnancy is confirmed before vaccination, DEFER strictly to immediate postpartum prior to discharge (Rule RB-IMMUNE-v1.2.1).",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Khalid Al-Mazrouei, MD",
+      credentials: "Consultant Microbiologist · Reference Virology Lab (Synthetic)",
+      signedAt: "22-Aug-2026 11:15 +04:00",
+      registryNote: "Transmitted via HL7 FHIR R4 DiagnosticReport to Malaffi HIE",
+    },
+    searchTokens: "rubella igg non-immune mmr vaccine 25514-1 serology hbsag varicella mubadala obl-102",
+  },
+  {
+    id: "DOC-OB-03",
+    linkedObligationId: "OBL-101",
+    category: "ob_note",
+    stageTag: "Antenatal",
+    dayTag: "Day 142",
+    shortTitle: "Antenatal Confirmation & Dating Ultrasound",
+    documentTitle: "OBSTETRIC INTAKE & FIRST-TRIMESTER DATING ULTRASOUND SUMMARY",
+    facilityName: "CORNICHE OB-GYN SPECIALIST CLINIC",
+    facilitySubline: "Maternal-Fetal Medicine & Antenatal Care · Abu Dhabi, UAE",
+    emrSystem: "Oracle Health (Cerner) · Malaffi HIE",
+    licenseCode: "DoH-SYN-CRN108",
+    accessionId: "US-CORN-2027-0203-19",
+    encounterId: "ENC-CORN-2027-0203",
+    fhirReference: "Condition/cond-pregnancy-confirmed-2027",
+    collectedAt: "03-Feb-2027 10:00 +04:00",
+    receivedAt: "03-Feb-2027 10:15 +04:00",
+    reportedAt: "03-Feb-2027 10:42 +04:00",
+    specimenType: "Transvaginal Ultrasound + Quantitative Serum β-hCG",
+    orderingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG (OB-GYN)",
+    performingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG (OB-GYN)",
+    reportStatus: "VERIFIED",
+    transferBanner:
+      "CROSS-PROVIDER CONTINUITY: Patient registered at Corniche OB-GYN (Oracle Health) 142 days after preconception care at Mubadala Primary Care (Epic). Prior unresolved obligations surfaced via ReproBridge Passport.",
+    analytes: [
+      {
+        testName: "Quantitative Serum β-hCG",
+        loinc: "21198-7",
+        value: "42,850",
+        unit: "mIU/mL",
+        flag: "POSITIVE",
+        referenceRange: "7–8 Weeks Gestation: 7,650 – 229,000",
+        method: "ECLIA",
+        highlight: true,
+      },
+      {
+        testName: "Crown-Rump Length (CRL)",
+        loinc: "11957-8",
+        value: "13.2",
+        unit: "mm",
+        flag: "NORMAL",
+        referenceRange: "Corresponds to 7w 4d EGA",
+        method: "Transvaginal US",
+      },
+      {
+        testName: "Fetal Cardiac Activity",
+        loinc: "55283-6",
+        value: "154",
+        unit: "bpm",
+        flag: "NORMAL",
+        referenceRange: "120 – 170 bpm (Regular)",
+        method: "M-Mode Doppler",
+      },
+      {
+        testName: "Estimated Date of Delivery (EDD)",
+        loinc: "11778-8",
+        value: "18-Sep-2027",
+        unit: "—",
+        flag: "NORMAL",
+        referenceRange: "Confirmed by CRL",
+        method: "Hadlock",
+      },
+    ],
+    clinicalNotes: [
+      "IMPRESSION: Single live intrauterine pregnancy at 7 weeks 4 days gestation. Normal yolk sac; no subchorionic hemorrhage.",
+      "CARE-GAP RECONCILIATION: External preconception labs from Hospital A (Mubadala Primary Care) revealed elevated TSH (4.80 mIU/L) and Rubella non-immune status. Urgent repeat thyroid panel ordered today; live MMR vaccination explicitly deferred to postpartum discharge.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Layla Al-Hashimi, MD, FACOG",
+      credentials: "Consultant Obstetrician & Gynecologist · Corniche OB-GYN (Synthetic)",
+      signedAt: "03-Feb-2027 10:42 +04:00",
+      registryNote: "Triggers deterministic event FHIR_PREGNANCY_CONFIRMED across Malaffi HIE",
+    },
+    searchTokens: "pregnancy confirmed antenatal ultrasound crl hcg 7w4d corniche oracle layla handoff transfer",
+  },
+  {
+    id: "DOC-LAB-04",
+    linkedObligationId: "OBL-101",
+    category: "lab",
+    stageTag: "Antenatal",
+    dayTag: "Day 148",
+    shortTitle: "Repeat Thyroid Panel & Levothyroxine e-Rx",
+    documentTitle: "ANTENATAL ENDOCRINE FOLLOW-UP LAB & THERAPEUTIC VERIFICATION",
+    facilityName: "CLEVELAND CLINIC ABU DHABI · CLINICAL LABS",
+    facilitySubline: "Al Maryah Island · Abu Dhabi, UAE · Malaffi HIE Connected Reference Lab",
+    emrSystem: "Epic · Malaffi HIE Lab Feed",
+    licenseCode: "DoH-SYN-CCAD01",
+    accessionId: "MAL-LAB-2026-88412",
+    encounterId: "ENC-CCAD-2027-0209",
+    fhirReference: "Observation/EVD-TSH-2026-10",
+    collectedAt: "09-Feb-2027 07:55 +04:00",
+    receivedAt: "09-Feb-2027 08:15 +04:00",
+    reportedAt: "09-Feb-2027 09:48 +04:00",
+    specimenType: "Serum (SST Gold Top · Pre-Dose)",
+    orderingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG (OB-GYN)",
+    performingPhysician: "Dr. Rami Al-Qasimi, MD (Endocrinology Lab Review)",
+    reportStatus: "VERIFIED",
+    analytes: [
+      {
+        testName: "Thyrotropin (TSH), Repeat Antenatal",
+        loinc: "3016-3",
+        value: "2.10",
+        unit: "mIU/L",
+        flag: "NORMALIZED",
+        referenceRange: "Trimester 1 Target: < 2.50 mIU/L",
+        method: "ECLIA (Cobas e801)",
+        priorDelta: "Prior 4.80 (▼ -56%)",
+        highlight: true,
+      },
+      {
+        testName: "Free Thyroxine (Free T4)",
+        loinc: "3024-7",
+        value: "15.8",
+        unit: "pmol/L",
+        flag: "NORMAL",
+        referenceRange: "12.0 – 22.0",
+        method: "ECLIA",
+        priorDelta: "Prior 13.4",
+      },
+      {
+        testName: "Thyroid Peroxidase Antibody (Anti-TPO)",
+        loinc: "8099-4",
+        value: "18",
+        unit: "IU/mL",
+        flag: "NORMAL",
+        referenceRange: "< 35 (Negative)",
+        method: "ECLIA",
+      },
+    ],
+    rxOrder: {
+      medication: "Levothyroxine Sodium 50 mcg Oral Tablet",
+      sig: "Take 1 tablet by mouth once daily, 30–60 minutes before breakfast; separate from prenatal iron/calcium by ≥ 4 hours.",
+      prescriber: "Dr. Layla Al-Hashimi, MD (OB-GYN)",
+      dispenseStatus: "Active & Dispensed · Malaffi e-Rx #RX-2027-90412",
+    },
+    clinicalNotes: [
+      "QUALIFYING CLOSURE EVIDENCE (OBL-101): Repeat antenatal TSH normalized to 2.10 mIU/L (within Trimester 1 target < 2.50 mIU/L) following clinician-approved Levothyroxine 50 mcg initiation.",
+      "FOLLOW-UP PLAN: Recheck TSH every 4 weeks through mid-gestation per routine antenatal endocrine monitoring.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Layla Al-Hashimi, MD, FACOG",
+      credentials: "Reviewing OB-GYN · Linked to Evidence ID EVD-TSH-2026-10",
+      signedAt: "09-Feb-2027 11:05 +04:00",
+      registryNote: "Qualifying evidence available in Neon Postgres for Clinician Verify & Close",
+    },
+    searchTokens: "repeat tsh 2.1 normalized levothyroxine 50 mcg cleveland clinic mal-lab-2026-88412 evd-tsh obl-101",
+  },
+  {
+    id: "DOC-IMM-05",
+    linkedObligationId: "OBL-102",
+    category: "immunization",
+    stageTag: "Postpartum",
+    dayTag: "Day 410",
+    shortTitle: "Postpartum Discharge & MMR Immunization",
+    documentTitle: "POSTPARTUM DISCHARGE & IMMUNIZATION ADMINISTRATION RECORD",
+    facilityName: "ABU DHABI MATERNITY WARD · CORNICHE HOSPITAL",
+    facilitySubline: "Postpartum Inpatient Unit · Malaffi Immunization Registry Feed",
+    emrSystem: "Inpatient EHR · Malaffi Registry",
+    licenseCode: "DoH-SYN-MAT410",
+    accessionId: "MAL-IMM-2026-55901",
+    encounterId: "ENC-ADM-2027-0918",
+    fhirReference: "Immunization/EVD-MMR-2026-11",
+    collectedAt: "20-Sep-2027 09:20 +04:00",
+    receivedAt: "20-Sep-2027 09:22 +04:00",
+    reportedAt: "20-Sep-2027 09:35 +04:00",
+    specimenType: "Subcutaneous Immunization · Pre-Discharge",
+    orderingPhysician: "Dr. Mariam Al-Suwaidi, MD (Postpartum OB-GYN)",
+    performingPhysician: "RN Fatima Al-Kaabi, BSN (Immunization Nurse)",
+    reportStatus: "VERIFIED",
+    transferBanner:
+      "POSTPARTUM WAKE-UP COMPLETED: Pregnancy live-vaccine contraindication lifted after delivery (SVD at 39w2d). Deferred OBL-102 reactivated and fulfilled prior to hospital discharge.",
+    analytes: [
+      {
+        testName: "MMR Vaccine (Measles, Mumps, Rubella Live)",
+        loinc: "CVX 03",
+        value: "0.5 mL SC",
+        unit: "Left Deltoid",
+        flag: "ADMINISTERED",
+        referenceRange: "Lot #MMR-2026-AE · Exp 11/2028",
+        method: "Subcutaneous Injection",
+        highlight: true,
+      },
+      {
+        testName: "Pregnancy Contraindication Status",
+        loinc: "Rule Check",
+        value: "Lifted (Postpartum Day 2)",
+        unit: "—",
+        flag: "NORMALIZED",
+        referenceRange: "Post-delivery verification complete",
+        method: "RB-IMMUNE-v1.2.1",
+      },
+      {
+        testName: "Post-Vaccination Observation (15 min)",
+        loinc: "Safety",
+        value: "No Adverse Reaction",
+        unit: "Stable",
+        flag: "NORMAL",
+        referenceRange: "Afebrile · Vitals WNL",
+        method: "Inpatient Nursing",
+      },
+    ],
+    clinicalNotes: [
+      "QUALIFYING CLOSURE EVIDENCE (OBL-102): Pre-discharge MMR vaccine administered without complication (Lot #MMR-2026-AE; Malaffi Immunization Registry #MAL-IMM-2026-55901).",
+      "DISCHARGE COUNSELING: MMR vaccination is compatible with breastfeeding; advised to avoid conception for 28 days post-vaccination.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Mariam Al-Suwaidi, MD",
+      credentials: "Postpartum OB-GYN · Linked to Evidence ID EVD-MMR-2026-11",
+      signedAt: "20-Sep-2027 09:35 +04:00",
+      registryNote: "Recorded in Malaffi Immunization Registry (Synthetic Demonstration Record)",
+    },
+    searchTokens: "postpartum mmr vaccine cvx 03 rubella lot mmr-2026-ae corniche maternity mariam mal-imm-2026-55901 obl-102",
+  },
+];
+
+function getStageRank(stage: string): number {
+  const lowered = stage.toLowerCase();
+  if (lowered.includes("postpartum")) return 2;
+  if (lowered.includes("antenatal") || lowered.includes("pregnan")) return 1;
+  return 0;
+}
+
+function getDocStageRank(stageTag: ClinicalDocument["stageTag"]): number {
+  if (stageTag === "Postpartum") return 2;
+  if (stageTag === "Antenatal") return 1;
+  return 0;
+}
+
+function flagBadgeStyle(flag?: AnalyteRow["flag"]): string {
+  switch (flag) {
+    case "HIGH":
+    case "NON-IMMUNE":
+      return "border-rose-300 bg-rose-50 text-rose-800";
+    case "POSITIVE":
+      return "border-amber-300 bg-amber-50 text-amber-900";
+    case "NORMALIZED":
+    case "ADMINISTERED":
+      return "border-emerald-300 bg-emerald-50 text-emerald-800";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-600";
+  }
+}
+
+function CategoryIcon({ category }: { category: DocCategory }) {
+  switch (category) {
+    case "lab":
+      return <FlaskConical className="h-3.5 w-3.5 shrink-0 text-teal-700" aria-hidden="true" />;
+    case "serology":
+      return <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-indigo-700" aria-hidden="true" />;
+    case "ob_note":
+      return <Stethoscope className="h-3.5 w-3.5 shrink-0 text-sky-700" aria-hidden="true" />;
+    case "immunization":
+      return <Syringe className="h-3.5 w-3.5 shrink-0 text-emerald-700" aria-hidden="true" />;
+    default:
+      return <FileText className="h-3.5 w-3.5 shrink-0 text-slate-600" aria-hidden="true" />;
+  }
+}
+
+export function getDefaultDocIdForObligation(obligationId: string): string {
+  if (obligationId === "OBL-101") return "DOC-LAB-01";
+  if (obligationId === "OBL-102") return "DOC-SER-02";
+  return `DOC-IMP-${obligationId}`;
+}
+
+export default function ClinicalDocumentsDrawer({
+  isOpen,
+  onClose,
+  initialDocId,
+  currentLifeStage,
+  obligations,
+  clinicianLabel = "Dr. Layla Al-Hashimi, MD (OB-GYN)",
+}: ClinicalDocumentsDrawerProps) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const titleId = useId();
+  const tableCaptionId = useId();
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [stageFilter, setStageFilter] = useState<"ALL" | "Preconception" | "Antenatal" | "Postpartum">("ALL");
+  const [selectedDocId, setSelectedDocId] = useState<string>("DOC-LAB-01");
+
+  // Dynamically include synthetic clinical reference sheets for any newly imported obligations
+  const documents = useMemo<ClinicalDocument[]>(() => {
+    const importedDocs: ClinicalDocument[] = obligations
+      .filter((o) => o.id !== "OBL-101" && o.id !== "OBL-102")
+      .map((o) => ({
+        id: `DOC-IMP-${o.id}`,
+        linkedObligationId: o.id,
+        category: "imported",
+        stageTag: o.life_stage.toLowerCase().includes("postpartum")
+          ? "Postpartum"
+          : o.life_stage.toLowerCase().includes("antenatal")
+            ? "Antenatal"
+            : "Preconception",
+        dayTag: "Imported",
+        shortTitle: o.title,
+        documentTitle: "IMPORTED CLINICAL FINDING & LABORATORY REFERENCE SHEET",
+        facilityName: "MALAFFI HIE · EXTERNAL FACILITY INTAKE",
+        facilitySubline: `${o.evidence_source} · Synthetic Clinical Document`,
+        emrSystem: "FHIR R4 / CSV Intake",
+        licenseCode: "DoH-SYN-IMP01",
+        accessionId: `ACC-IMP-${o.id}`,
+        encounterId: `ENC-${o.id}`,
+        fhirReference: o.evidence_source,
+        collectedAt: "Synthetic Intake Timestamp",
+        receivedAt: "Synthetic Intake Timestamp",
+        reportedAt: "Current Demo Session",
+        specimenType: "Clinical Observation / Intake Record",
+        orderingPhysician: o.owner,
+        performingPhysician: clinicianLabel,
+        reportStatus: "FINAL",
+        analytes: [
+          {
+            testName: o.title,
+            loinc: o.rule_version,
+            value: o.priority,
+            unit: o.status,
+            flag: o.priority === "URGENT" || o.priority === "HIGH" ? "HIGH" : "POSITIVE",
+            referenceRange: "Clinician review required",
+            method: "Imported Record",
+            highlight: true,
+          },
+        ],
+        clinicalNotes: [
+          `CLINICAL RATIONALE: ${o.rationale}`,
+          ...(o.closure_evidence
+            ? [`VERIFIED CLOSURE (${o.verified_by ?? "Clinician"}): ${o.closure_evidence}`]
+            : []),
+        ],
+        signatureBlock: {
+          signedBy: o.verified_by ?? clinicianLabel,
+          credentials: `${o.owner} · Synthetic Intake Record`,
+          signedAt: "Current Session",
+          registryNote: "Stored locally inside UAE boundary; excluded from external AI calls.",
+        },
+        searchTokens: `${o.id} ${o.title} ${o.rationale} ${o.evidence_source} ${o.owner}`.toLowerCase(),
+      }));
+
+    return [...BASE_CLINICAL_DOCUMENTS, ...importedDocs];
+  }, [obligations, clinicianLabel]);
+
+  // Sync selected document when opened via a specific obligation link
+  useEffect(() => {
+    if (isOpen && initialDocId) {
+      const exists = documents.some((d) => d.id === initialDocId);
+      if (exists) {
+        setSelectedDocId(initialDocId);
+        setStageFilter("ALL");
+        setSearchQuery("");
+      }
+    }
+  }, [isOpen, initialDocId, documents]);
+
+  // Native <dialog> open/close lifecycle + top-layer exit animation & Safari light-dismiss fallback
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen && !dialog.open) {
+      dialog.removeAttribute("data-closing");
+      dialog.showModal();
+    } else if (!isOpen && dialog.open) {
+      void closeDialogWithAnimation(dialog);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const handleClose = () => {
+      dialog.returnValue = "";
+      onClose();
+    };
+
+    const handleCancel = (event: Event) => {
+      event.preventDefault();
+      void closeDialogWithAnimation(dialog);
+    };
+
+    dialog.addEventListener("close", handleClose);
+    dialog.addEventListener("cancel", handleCancel);
+
+    // Safari fallback for `closedby="any"` light-dismiss using pointerdown + pointerup rect check
+    let cleanupLightDismiss: (() => void) | undefined;
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      let pressedOutside = false;
+      const isOutside = (e: PointerEvent) => {
+        const r = dialog.getBoundingClientRect();
+        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+      };
+      const onPointerDown = (e: PointerEvent) => {
+        pressedOutside = isOutside(e);
+      };
+      const onPointerUp = (e: PointerEvent) => {
+        if (pressedOutside && isOutside(e)) {
+          void closeDialogWithAnimation(dialog);
+        }
+        pressedOutside = false;
+      };
+      dialog.addEventListener("pointerdown", onPointerDown);
+      dialog.addEventListener("pointerup", onPointerUp);
+      cleanupLightDismiss = () => {
+        dialog.removeEventListener("pointerdown", onPointerDown);
+        dialog.removeEventListener("pointerup", onPointerUp);
+      };
+    }
+
+    return () => {
+      dialog.removeEventListener("close", handleClose);
+      dialog.removeEventListener("cancel", handleCancel);
+      cleanupLightDismiss?.();
+    };
+  }, [onClose]);
+
+  const filteredDocs = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return documents.filter((doc) => {
+      if (stageFilter !== "ALL" && doc.stageTag !== stageFilter) return false;
+      if (!q) return true;
+      return (
+        doc.searchTokens.includes(q) ||
+        doc.documentTitle.toLowerCase().includes(q) ||
+        doc.shortTitle.toLowerCase().includes(q) ||
+        doc.facilityName.toLowerCase().includes(q) ||
+        doc.accessionId.toLowerCase().includes(q)
+      );
+    });
+  }, [documents, searchQuery, stageFilter]);
+
+  const activeDoc =
+    filteredDocs.find((d) => d.id === selectedDocId) ??
+    documents.find((d) => d.id === selectedDocId) ??
+    filteredDocs[0] ??
+    documents[0];
+
+  const currentStageRank = getStageRank(currentLifeStage);
+  const patientName = obligations[0]?.patient_name ?? "Amina Al-Mansoori (Synthetic)";
+  const patientId = obligations[0]?.patient_id ?? "PAT-AE-4092";
+  const linkedObligation = activeDoc?.linkedObligationId
+    ? obligations.find((o) => o.id === activeDoc.linkedObligationId) ?? null
+    : null;
+
+  function handlePrintDocument() {
+    document.body.classList.add("rb-printing-doc");
+    const cleanup = () => {
+      document.body.classList.remove("rb-printing-doc");
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    window.print();
+    // Fallback cleanup in case afterprint doesn't fire in some headless/embedded views
+    window.setTimeout(() => {
+      document.body.classList.remove("rb-printing-doc");
+    }, 1500);
+  }
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby={titleId}
+      className="rb-doc-drawer"
+      {...({ closedby: "any" } as Record<string, string>)}
+    >
+      <div className="flex h-full flex-col overflow-hidden bg-slate-100 text-slate-900 shadow-2xl">
+        {/* Top Clinician Viewer Bar */}
+        <header className="shrink-0 border-b border-slate-200 bg-white px-5 py-3.5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 id={titleId} className="text-sm font-semibold text-slate-900">
+                  Clinical Source Documents
+                </h2>
+                <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-[11px] font-medium text-indigo-800">
+                  <EyeOff className="h-3 w-3" aria-hidden="true" />
+                  Clinician Reference Only · Excluded from AI
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                  Synthetic Demo Records
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Viewing as <span className="font-medium text-slate-700">{clinicianLabel}</span> ·
+                Raw HIE/EMR reports stay inside the UAE local boundary and are never sent to OpenRouter.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handlePrintDocument}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+              >
+                <Printer className="h-3.5 w-3.5" aria-hidden="true" />
+                Print / Save PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (dialogRef.current) void closeDialogWithAnimation(dialogRef.current);
+                }}
+                aria-label="Close Clinical Documents panel"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+                Close
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Main 2-Pane Document Workspace */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[310px_minmax(0,1fr)]">
+          {/* Left Rail: Search + Filter + Document List */}
+          <aside className="flex min-h-0 flex-col border-b border-slate-200 bg-slate-50 lg:border-b-0 lg:border-r">
+            <div className="shrink-0 space-y-2.5 border-b border-slate-200 bg-white p-3.5">
+              <label className="relative block">
+                <span className="sr-only">Search clinical documents by lab, LOINC, or facility</span>
+                <Search
+                  className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search TSH, Rubella, LOINC, Corniche..."
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:bg-white focus:outline-none"
+                />
+              </label>
+
+              <div
+                role="tablist"
+                aria-label="Filter clinical documents by care stage"
+                onKeyDown={(e) =>
+                  handleSpatialKeyDown(e, '[role="tab"]', (next) => {
+                    const st = next.dataset.stage as typeof stageFilter | undefined;
+                    if (st) setStageFilter(st);
+                  })
+                }
+                className="flex flex-wrap gap-1"
+              >
+                {(["ALL", "Preconception", "Antenatal", "Postpartum"] as const).map((stage) => {
+                  const active = stageFilter === stage;
+                  return (
+                    <button
+                      key={stage}
+                      type="button"
+                      role="tab"
+                      data-stage={stage}
+                      aria-selected={active}
+                      tabIndex={active ? 0 : -1}
+                      onClick={() => setStageFilter(stage)}
+                      className={`rounded-md px-2 py-1 text-[11px] font-medium transition ${
+                        active
+                          ? "bg-teal-600 text-white shadow-2xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      {stage === "ALL" ? `All (${documents.length})` : stage}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+              {filteredDocs.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500">
+                  No synthetic documents match “{searchQuery}”.
+                </p>
+              ) : (
+                <ul className="space-y-1.5" aria-label="Patient clinical documents">
+                  {filteredDocs.map((doc) => {
+                    const isSelected = doc.id === activeDoc?.id;
+                    const docStageRank = getDocStageRank(doc.stageTag);
+                    const isStageReached = docStageRank <= currentStageRank;
+
+                    return (
+                      <li key={doc.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDocId(doc.id)}
+                          aria-current={isSelected ? "true" : undefined}
+                          className={`w-full rounded-lg border p-2.5 text-left transition ${
+                            isSelected
+                              ? "border-teal-500 bg-white ring-2 ring-teal-500/15"
+                              : "border-slate-200/80 bg-white/70 hover:border-slate-300 hover:bg-white"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold text-slate-500">
+                              <CategoryIcon category={doc.category} />
+                              {doc.id}
+                            </span>
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                isStageReached
+                                  ? "bg-emerald-50 text-emerald-800"
+                                  : "bg-slate-100 text-slate-500"
+                              }`}
+                            >
+                              {isStageReached ? `${doc.dayTag} · Active` : `${doc.dayTag} · Preview`}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs font-semibold leading-snug text-slate-900">
+                            {doc.shortTitle}
+                          </p>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500">
+                            <span className="inline-flex items-center gap-1 truncate">
+                              <Building2 className="h-3 w-3 shrink-0" aria-hidden="true" />
+                              {doc.emrSystem}
+                            </span>
+                            {doc.linkedObligationId && (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono font-medium text-slate-700">
+                                {doc.linkedObligationId}
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <div className="shrink-0 border-t border-slate-200 bg-white px-3.5 py-2.5 text-[11px] text-slate-500">
+              <div className="flex items-center gap-1.5 font-medium text-slate-700">
+                <Lock className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
+                Zero-AI Document Isolation
+              </div>
+              <p className="mt-0.5 leading-relaxed">
+                Documents render locally for clinician verification only. No PDF or report text is
+                sent to external LLM endpoints.
+              </p>
+            </div>
+          </aside>
+
+          {/* Right Canvas: Hyper-Realistic Clinical Document Sheet */}
+          <section className="min-h-0 overflow-y-auto p-4 sm:p-6">
+            {activeDoc && (
+              <article className="rb-doc-paper rb-doc-printable mx-auto max-w-3xl overflow-hidden rounded-lg border border-slate-300 shadow-md">
+                {/* Top Synthetic Banner Strip */}
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-900 px-5 py-2 text-[10px] font-medium tracking-wider text-slate-200">
+                  <span className="uppercase">
+                    SYNTHETIC DEMONSTRATION RECORD · NOT A REAL CLINICAL DOCUMENT
+                  </span>
+                  <span className="font-mono text-teal-300">
+                    {activeDoc.licenseCode} · {activeDoc.reportStatus} REPORT
+                  </span>
+                </div>
+
+                <div className="relative p-5 sm:p-7">
+                  {/* Subtle Watermark Stamp */}
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden opacity-[0.045]"
+                  >
+                    <span className="-rotate-24 whitespace-nowrap font-mono text-4xl font-black tracking-[0.25em] text-slate-900 sm:text-5xl">
+                      SYNTHETIC DEMO
+                    </span>
+                  </div>
+
+                  {/* Facility Header & Barcode */}
+                  <div className="relative flex flex-wrap items-start justify-between gap-4 border-b-2 border-slate-900 pb-4">
+                    <div>
+                      <p className="text-[11px] font-bold tracking-widest text-teal-800">
+                        {activeDoc.facilityName}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        {activeDoc.facilitySubline}
+                      </p>
+                      <h3 className="mt-2 font-serif text-base font-bold tracking-tight text-slate-950 sm:text-lg">
+                        {activeDoc.documentTitle}
+                      </h3>
+                    </div>
+
+                    <AccessionBarcode value={activeDoc.accessionId} />
+                  </div>
+
+                  {/* Two-Column Patient & Specimen Metadata Block */}
+                  <div className="relative mt-4 grid gap-3 rounded border border-slate-300 bg-slate-50/90 p-3.5 text-[11px] sm:grid-cols-2">
+                    <dl className="space-y-1">
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">Patient Name</dt>
+                        <dd className="text-right font-semibold text-slate-900">{patientName}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">MRN / Patient ID</dt>
+                        <dd className="font-mono text-slate-900">{patientId}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">DOB / Sex</dt>
+                        <dd className="text-slate-800">14-Mar-1994 (32Y · F)</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">Emirates ID</dt>
+                        <dd className="font-mono text-slate-700">784-1994-0004092-7 (SYN)</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">Encounter / Source</dt>
+                        <dd className="font-mono text-slate-700">{activeDoc.encounterId}</dd>
+                      </div>
+                    </dl>
+
+                    <dl className="space-y-1 border-t border-slate-200 pt-2 sm:border-l sm:border-t-0 sm:pl-3.5 sm:pt-0">
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">Ordering MD</dt>
+                        <dd className="text-right font-medium text-slate-900">
+                          {activeDoc.orderingPhysician}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">Specimen</dt>
+                        <dd className="text-right text-slate-800">{activeDoc.specimenType}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">Collected</dt>
+                        <dd className="font-mono text-slate-800">{activeDoc.collectedAt}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">Reported</dt>
+                        <dd className="font-mono text-slate-800">{activeDoc.reportedAt}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="font-semibold uppercase text-slate-500">FHIR Resource</dt>
+                        <dd className="font-mono text-teal-800">{activeDoc.fhirReference}</dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  {/* Cross-Provider Continuity Callout (when applicable) */}
+                  {activeDoc.transferBanner && (
+                    <div className="relative mt-3.5 rounded border-l-4 border-teal-600 bg-teal-50/80 px-3.5 py-2.5 text-xs text-teal-950">
+                      {activeDoc.transferBanner}
+                    </div>
+                  )}
+
+                  {/* Linked Obligation Status Strip */}
+                  {linkedObligation && (
+                    <div className="relative mt-3.5 flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2 text-[11px]">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-slate-500">Linked Passport Entry:</span>
+                        <span className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white">
+                          {linkedObligation.id}
+                        </span>
+                        <span className="font-medium text-slate-800">
+                          {linkedObligation.rule_version}
+                        </span>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold ${
+                          linkedObligation.status === "VERIFIED_CLOSED"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : linkedObligation.status === "ESCALATED_FOR_REVIEW"
+                              ? "bg-rose-100 text-rose-800"
+                              : linkedObligation.status === "DEFERRED_TO_POSTPARTUM"
+                                ? "bg-indigo-100 text-indigo-800"
+                                : "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        {linkedObligation.status}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Responsive Clinical Results Table */}
+                  <div className="relative mt-4">
+                    <div
+                      tabIndex={0}
+                      role="region"
+                      aria-labelledby={tableCaptionId}
+                      className="rb-doc-table-wrap rounded border border-slate-300 bg-white"
+                    >
+                      <table className="rb-doc-table text-xs">
+                        <caption
+                          id={tableCaptionId}
+                          className="border-b border-slate-200 bg-slate-100 px-3 py-1.5 text-left font-mono text-[10px] font-bold uppercase tracking-wider text-slate-700"
+                        >
+                          Reported Findings & Reference Intervals ({activeDoc.emrSystem})
+                        </caption>
+                        <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                          <tr>
+                            <th scope="col" className="border-b border-slate-300 px-3 py-2 text-left">
+                              Test / Observation
+                            </th>
+                            <th scope="col" className="border-b border-slate-300 px-3 py-2 text-left">
+                              Result
+                            </th>
+                            <th scope="col" className="border-b border-slate-300 px-3 py-2 text-left">
+                              Flag
+                            </th>
+                            <th scope="col" className="border-b border-slate-300 px-3 py-2 text-left">
+                              Reference Interval
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {activeDoc.analytes.map((row) => (
+                            <tr
+                              key={row.testName}
+                              className={row.highlight ? "bg-amber-50/70" : "bg-white"}
+                            >
+                              <th
+                                scope="row"
+                                className={`px-3 py-2.5 font-semibold text-slate-900 ${
+                                  row.highlight ? "bg-amber-50/90" : "bg-white"
+                                }`}
+                              >
+                                <div>{row.testName}</div>
+                                <div className="mt-0.5 font-mono text-[10px] font-normal text-slate-500">
+                                  {row.loinc}
+                                  {row.method ? ` · ${row.method}` : ""}
+                                </div>
+                              </th>
+                              <td data-label="Result" className="px-3 py-2.5 font-mono text-slate-900">
+                                <span className={row.highlight ? "font-bold text-slate-950" : ""}>
+                                  {row.value}
+                                </span>{" "}
+                                <span className="text-[11px] text-slate-500">{row.unit}</span>
+                                {row.priorDelta && (
+                                  <div className="mt-0.5 text-[10px] font-medium text-emerald-700">
+                                    {row.priorDelta}
+                                  </div>
+                                )}
+                              </td>
+                              <td data-label="Flag" className="px-3 py-2.5">
+                                {row.flag && (
+                                  <span
+                                    className={`inline-block rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold ${flagBadgeStyle(
+                                      row.flag
+                                    )}`}
+                                  >
+                                    {row.flag}
+                                  </span>
+                                )}
+                              </td>
+                              <td
+                                data-label="Reference Interval"
+                                className="px-3 py-2.5 text-[11px] text-slate-600"
+                              >
+                                {row.referenceRange}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Optional Active Prescription Box */}
+                  {activeDoc.rxOrder && (
+                    <div className="relative mt-4 rounded border border-emerald-300 bg-emerald-50/60 p-3.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-emerald-900">
+                          Verified Electronic Prescription (e-Rx)
+                        </p>
+                        <span className="inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-emerald-800">
+                          <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                          {activeDoc.rxOrder.dispenseStatus}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 font-semibold text-slate-900">
+                        {activeDoc.rxOrder.medication}
+                      </p>
+                      <p className="mt-0.5 text-slate-700">{activeDoc.rxOrder.sig}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Prescriber: {activeDoc.rxOrder.prescriber}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Clinical Interpretation & Footnotes */}
+                  <div className="relative mt-4 rounded border border-slate-200 bg-slate-50/80 p-3.5">
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                      Clinical Interpretation & Governance Notes
+                    </p>
+                    <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-slate-700">
+                      {activeDoc.clinicalNotes.map((note, idx) => (
+                        <li key={idx} className="flex gap-2">
+                          <span className="font-mono text-slate-400">[{idx + 1}]</span>
+                          <span>{note}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Electronic Signature Footer */}
+                  <footer className="relative mt-5 flex flex-wrap items-end justify-between gap-4 border-t border-slate-300 pt-3.5 text-[11px]">
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-wider text-slate-400">
+                        Electronically Verified By
+                      </p>
+                      <p className="mt-0.5 font-serif text-sm font-semibold italic text-slate-900">
+                        {activeDoc.signatureBlock.signedBy}
+                      </p>
+                      <p className="text-slate-600">{activeDoc.signatureBlock.credentials}</p>
+                    </div>
+
+                    <div className="text-left sm:text-right">
+                      <p className="font-mono text-[10px] text-slate-500">
+                        Verified: {activeDoc.signatureBlock.signedAt}
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        {activeDoc.signatureBlock.registryNote}
+                      </p>
+                      <p className="mt-1 font-mono text-[10px] font-semibold text-amber-800">
+                        SYNTHETIC DATA · ILLUSTRATIVE CLINICAL RULES · CLINICIAN SIGN-OFF REQUIRED
+                      </p>
+                    </div>
+                  </footer>
+                </div>
+              </article>
+            )}
+          </section>
+        </div>
+      </div>
+    </dialog>
+  );
+}
