@@ -350,9 +350,9 @@ function parseHandoffItems(text: string): string[] {
     .map((line) => line.replace(/^\s*(?:[•*-]|\d+[.)])\s*/, "").trim())
     .filter(Boolean);
   if (lines.length > 1) return lines;
-  // Handle single-line numbered lists like "1) ... 2) ..."
+  // Handle single-line numbered lists like "1) ... 2) ..." without matching "(OBL-101) "
   const numbered = text
-    .split(/\s*(?=\d+[.)]\s+)/)
+    .split(/(?:^|\s+)(?=\d+[.)]\s+)/)
     .map((part) => part.replace(/^\s*\d+[.)]\s*/, "").trim())
     .filter(Boolean);
   return numbered.length > 0 ? numbered : lines;

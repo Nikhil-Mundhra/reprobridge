@@ -64,9 +64,9 @@ def _deterministic_fallback(payload: dict[str, Any], reason: str) -> dict[str, A
             "live-vaccine obligation preserved and deferred to postpartum."
         ),
         "specialist_handoff": (
-            "1) Review escalated thyroid obligation (OBL-101) against first-trimester TSH target (<2.5 mIU/L) "
-            "and confirm clinician-approved management plan. "
-            "2) Confirm Rubella non-immune obligation (OBL-102) remains scheduled on the postpartum pathway."
+            "• Review escalated thyroid obligation (OBL-101) against first-trimester TSH target (<2.5 mIU/L) "
+            "and confirm clinician-approved management plan.\n"
+            "• Confirm Rubella non-immune obligation (OBL-102) remains scheduled on the postpartum pathway."
         ),
     }
 
