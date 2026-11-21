@@ -797,8 +797,29 @@ describe("<PrototypeDemo /> component workflows", () => {
     expect(within(cohortStrip).getByText("3 Patients")).toBeInTheDocument();
     expect(within(cohortStrip).getByText("1/3")).toBeInTheDocument();
 
+    // Prev/Next stepper precedes the Switch patient button (left-anchored geometry)
+    const nextBtn = within(cohortStrip).getByRole("button", { name: "Next patient" });
+    const prevBtn = within(cohortStrip).getByRole("button", { name: "Previous patient" });
+    const switchBtn = within(cohortStrip).getByRole("button", { name: /Switch patient/i });
+    expect(nextBtn.compareDocumentPosition(switchBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Compact switcher omits clinical track, life-stage badge, and (Synthetic) suffix
+    expect(within(switchBtn).getByText("Amina Al-Mansoori")).toBeInTheDocument();
+    expect(within(cohortStrip).queryByText(/Endocrine & Rubella Continuity/i)).not.toBeInTheDocument();
+    expect(within(cohortStrip).queryByText(/\(Synthetic\)/i)).not.toBeInTheDocument();
+
+    // Step forward to Fatima (2/3) and back to Amina (1/3)
+    await user.click(nextBtn);
+    expect(await within(cohortStrip).findByText("2/3")).toBeInTheDocument();
+    const main = screen.getByRole("main");
+    expect(await within(main).findByText(/Fatima Al-Zaabi \(Synthetic\)/)).toBeInTheDocument();
+
+    await user.click(prevBtn);
+    expect(await within(cohortStrip).findByText("1/3")).toBeInTheDocument();
+    expect(await within(main).findByText(/Amina Al-Mansoori \(Synthetic\)/)).toBeInTheDocument();
+
     // Open searchable/sortable Population Registry dialog
-    await user.click(within(cohortStrip).getByRole("button", { name: /Switch Patient/i }));
+    await user.click(within(cohortStrip).getByRole("button", { name: /Switch patient/i }));
     const registry = await screen.findByRole("dialog", { name: /Population Registry/i });
 
     expect(within(registry).getByText("Amina Al-Mansoori (Synthetic)")).toBeInTheDocument();
@@ -825,7 +846,6 @@ describe("<PrototypeDemo /> component workflows", () => {
       expect(screen.queryByRole("dialog", { name: /Population Registry/i })).not.toBeInTheDocument();
     });
 
-    const main = screen.getByRole("main");
     expect(await within(main).findByText(/Fatima Al-Zaabi \(Synthetic\)/)).toBeInTheDocument();
     expect(within(main).getByText("PAT-AE-5180")).toBeInTheDocument();
     expect(within(main).getByText("Al Bateen Primary Clinic")).toBeInTheDocument();
