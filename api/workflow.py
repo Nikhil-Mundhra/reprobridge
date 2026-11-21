@@ -123,7 +123,9 @@ def _evaluate_rule_for_obligation(event_type: str, item: dict[str, Any]) -> dict
         return {
             "id": obl_id,
             "life_stage": "Antenatal (Trimester 1)",
-            "priority": "HIGH" if item.get("priority") == "MEDIUM" else item.get("priority", "HIGH"),
+            "priority": "HIGH"
+            if item.get("priority") == "MEDIUM"
+            else item.get("priority", "HIGH"),
             "status": "ESCALATED_FOR_REVIEW",
         }
 
@@ -287,7 +289,9 @@ def synthesize_coordination_brief(state: TransitionState) -> dict[str, Any]:
     trace.append(
         {
             "node": "synthesize_coordination_brief",
-            "execution": "agentic" if synthesis["mode"] == "openrouter" else "deterministic_fallback",
+            "execution": "agentic"
+            if synthesis["mode"] == "openrouter"
+            else "deterministic_fallback",
             "phi_exposed": False,
             "detail": (
                 "Drafted clinician handoff brief via OpenRouter for OB-GYN sign-off."
@@ -310,7 +314,7 @@ def synthesize_coordination_brief(state: TransitionState) -> dict[str, Any]:
 
 
 def build_transition_graph():
-    graph = StateGraph(TransitionState)
+    graph = StateGraph(TransitionState)  # ty: ignore[invalid-argument-type]  # LangGraph StateLike protocol vs stdlib TypedDict
     graph.add_node("detect_open_obligations", detect_open_obligations)
     graph.add_node("evaluate_life_stage_transition", evaluate_life_stage_transition)
     graph.add_node("apply_uae_privacy_firewall", apply_uae_privacy_firewall)

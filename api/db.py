@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -106,7 +106,9 @@ def get_direct_engine() -> Engine | None:
 
     Uses DATABASE_URL_UNPOOLED per Neon best practices so DDL never runs over PgBouncer.
     """
-    raw_url = os.getenv("DATABASE_URL_UNPOOLED", "").strip() or os.getenv("DATABASE_URL", "").strip()
+    raw_url = (
+        os.getenv("DATABASE_URL_UNPOOLED", "").strip() or os.getenv("DATABASE_URL", "").strip()
+    )
     if not raw_url:
         return None
     return create_engine(
@@ -399,14 +401,14 @@ SEED_CLINICAL_EVIDENCE: list[dict[str, Any]] = [
 ]
 
 _MEMORY_STORE: list[dict[str, Any]] = [
-    {**item, "updated_at": datetime.now(timezone.utc)} for item in ALL_SEED_OBLIGATIONS
+    {**item, "updated_at": datetime.now(UTC)} for item in ALL_SEED_OBLIGATIONS
 ]
 _MEMORY_AUDIT: list[dict[str, Any]] = [
-    {"id": idx + 1, **item, "created_at": datetime.now(timezone.utc)}
+    {"id": idx + 1, **item, "created_at": datetime.now(UTC)}
     for idx, item in enumerate(SEED_AUDIT_EVENTS)
 ]
 _MEMORY_EVIDENCE: list[dict[str, Any]] = [
-    {**item, "recorded_at": datetime.now(timezone.utc)} for item in SEED_CLINICAL_EVIDENCE
+    {**item, "recorded_at": datetime.now(UTC)} for item in SEED_CLINICAL_EVIDENCE
 ]
 
 
@@ -419,11 +421,9 @@ def ensure_schema_and_seed() -> None:
     if direct_engine is None:
         return
     metadata.create_all(direct_engine)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with direct_engine.begin() as conn:
-        existing_ids = {
-            row[0] for row in conn.execute(select(obligations_table.c.id)).all()
-        }
+        existing_ids = {row[0] for row in conn.execute(select(obligations_table.c.id)).all()}
         missing_obls = [
             {**item, "updated_at": now}
             for item in ALL_SEED_OBLIGATIONS
@@ -560,9 +560,7 @@ def list_patient_summaries() -> list[dict[str, Any]]:
                     for r in rows
                     if r.get("priority") == "URGENT" and r.get("status") != "VERIFIED_CLOSED"
                 ),
-                deferred_count=sum(
-                    1 for r in rows if r.get("status") == "DEFERRED_TO_POSTPARTUM"
-                ),
+                deferred_count=sum(1 for r in rows if r.get("status") == "DEFERRED_TO_POSTPARTUM"),
                 closed_count=sum(1 for r in rows if r.get("status") == "VERIFIED_CLOSED"),
             )
     else:
@@ -598,15 +596,15 @@ def list_patient_summaries() -> list[dict[str, Any]]:
                     else_=0,
                 )
             ).label("deferred_count"),
-            func.sum(
-                case((obligations_table.c.status == "VERIFIED_CLOSED", 1), else_=0)
-            ).label("closed_count"),
-            func.max(
-                case((obligations_table.c.life_stage == "Postpartum", 1), else_=0)
-            ).label("has_postpartum"),
-            func.max(
-                case((obligations_table.c.life_stage.like("Antenatal%"), 1), else_=0)
-            ).label("has_antenatal"),
+            func.sum(case((obligations_table.c.status == "VERIFIED_CLOSED", 1), else_=0)).label(
+                "closed_count"
+            ),
+            func.max(case((obligations_table.c.life_stage == "Postpartum", 1), else_=0)).label(
+                "has_postpartum"
+            ),
+            func.max(case((obligations_table.c.life_stage.like("Antenatal%"), 1), else_=0)).label(
+                "has_antenatal"
+            ),
             func.max(obligations_table.c.life_stage).label("sample_life_stage"),
         ).group_by(obligations_table.c.patient_id)
 
@@ -694,9 +692,12 @@ def query_patients(
             if query_text not in haystack:
                 continue
 
-        if stage_norm and stage_norm != "all":
-            if not str(p.get("life_stage", "")).lower().startswith(stage_norm):
-                continue
+        if (
+            stage_norm
+            and stage_norm != "all"
+            and not str(p.get("life_stage", "")).lower().startswith(stage_norm)
+        ):
+            continue
 
         if triage_norm == "urgent" and p["urgent_count"] <= 0:
             continue
@@ -714,6 +715,7 @@ def query_patients(
     if sort_norm == "name":
         filtered.sort(key=lambda p: str(p.get("patient_name", "")).lower())
     elif sort_norm == "stage":
+
         def _stage_rank(p: dict[str, Any]) -> tuple[int, int]:
             ls = str(p.get("life_stage", "")).lower()
             rank = 0 if ls == "postpartum" else 1 if ls.startswith("antenatal") else 2
@@ -782,7 +784,7 @@ def append_audit_event(
     summary: str,
     obligation_id: str | None = None,
 ) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "obligation_id": obligation_id,
         "event_type": event_type,
@@ -803,7 +805,7 @@ def append_audit_event(
 
 
 def update_obligation(obligation_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-    updates = {**updates, "updated_at": datetime.now(timezone.utc)}
+    updates = {**updates, "updated_at": datetime.now(UTC)}
     engine = get_engine()
     if engine is None:
         for item in _MEMORY_STORE:
@@ -818,9 +820,11 @@ def update_obligation(obligation_id: str, updates: dict[str, Any]) -> dict[str, 
             .where(obligations_table.c.id == obligation_id)
             .values(**updates)
         )
-        row = conn.execute(
-            select(obligations_table).where(obligations_table.c.id == obligation_id)
-        ).mappings().first()
+        row = (
+            conn.execute(select(obligations_table).where(obligations_table.c.id == obligation_id))
+            .mappings()
+            .first()
+        )
         return dict(row) if row else None
 
 
@@ -845,7 +849,7 @@ def list_evidence_for_obligation(obligation_id: str) -> list[dict[str, Any]]:
 
 def create_obligation(item: dict[str, Any]) -> dict[str, Any]:
     """Insert a new clinical obligation (manual entry or CSV/table import)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record = {
         "id": item["id"],
         "patient_id": item.get("patient_id") or "PAT-AE-4092",
@@ -869,16 +873,14 @@ def create_obligation(item: dict[str, Any]) -> dict[str, Any]:
         return dict(record)
     ensure_schema_and_seed()
     with engine.begin() as conn:
-        conn.execute(
-            obligations_table.delete().where(obligations_table.c.id == record["id"])
-        )
+        conn.execute(obligations_table.delete().where(obligations_table.c.id == record["id"]))
         conn.execute(obligations_table.insert().values(**record))
     return dict(record)
 
 
 def create_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
     """Insert a new incoming clinical evidence record into Neon Postgres."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     record = {
         "id": item["id"],
         "obligation_id": item["obligation_id"],
@@ -908,7 +910,7 @@ def create_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
 
 def reset_obligations(patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
     """Reset synthetic demo data back to initial preconception state."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     engine = get_engine()
     if engine is None:
         _MEMORY_STORE.clear()

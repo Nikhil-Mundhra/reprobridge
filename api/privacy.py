@@ -49,7 +49,7 @@ class PrivacyViolationError(RuntimeError):
 
 def pseudonymize_patient_id(patient_id: str) -> str:
     """Create a non-reversible ephemeral case token from a patient ID."""
-    digest = hashlib.sha256(f"reprobridge-uae-salt:{patient_id}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"reprobridge-uae-salt:{patient_id}".encode()).hexdigest()
     return f"ANON-CASE-{digest[:8].upper()}"
 
 
@@ -74,7 +74,9 @@ def deidentify_obligation(obligation: dict[str, Any]) -> dict[str, Any]:
         "obligation_id": obligation.get("id"),
         "case_token": pseudonymize_patient_id(patient_id),
         "life_stage": obligation.get("life_stage"),
-        "clinical_category": _CLINICAL_CATEGORIES.get(rule_version, "preventive_reproductive_followup"),
+        "clinical_category": _CLINICAL_CATEGORIES.get(
+            rule_version, "preventive_reproductive_followup"
+        ),
         "rule_version": rule_version,
         "priority": obligation.get("priority"),
         "status": obligation.get("status"),
@@ -219,7 +221,9 @@ def _check_keys(obj: Any) -> None:
     if isinstance(obj, dict):
         for key, value in obj.items():
             if key in PHI_FIELDS:
-                raise PrivacyViolationError(f"Forbidden PHI key '{key}' found in outbound AI payload.")
+                raise PrivacyViolationError(
+                    f"Forbidden PHI key '{key}' found in outbound AI payload."
+                )
             _check_keys(value)
     elif isinstance(obj, list):
         for item in obj:

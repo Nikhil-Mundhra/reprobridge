@@ -90,6 +90,13 @@ def test_build_obligation_explain_payload_scrubs_phi_and_passes_firewall():
     assert_phi_free(report["payload"])
 
     serialized = json.dumps(report["payload"])
-    for leaked in ("Amina", "Al-Mansoori", "PAT-AE-4092", "784-1992-1234567-1", "amina@example.ae", "+971 50 123 4567"):
+    for leaked in (
+        "Amina",
+        "Al-Mansoori",
+        "PAT-AE-4092",
+        "784-1992-1234567-1",
+        "amina@example.ae",
+        "+971 50 123 4567",
+    ):
         assert leaked not in serialized
     assert "4.8 mIU/L" in serialized

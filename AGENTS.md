@@ -68,29 +68,47 @@ Every change to backend, AI orchestration, MCP tools, or API payloads **must** p
 npm run dev
 ```
 
-### Verification (Run Before Completing Work)
+### Verification (Definition of Done — Run Before Completing Work)
+A task is NOT complete until every relevant check below passes with zero errors:
+
 ```bash
-# Backend unit, privacy, MCP, and end-to-end API tests
+# Backend lint, formatting, static types, and tests (run when modifying api/ or tests/)
+.venv/bin/ruff check --fix api tests
+.venv/bin/ruff format --check api tests   # run `.venv/bin/ruff format api tests` if formatting fails
+.venv/bin/ty check api tests
 .venv/bin/pytest -q
 
-# Frontend strict TypeScript check + production bundle
+# Frontend strict TypeScript check + production bundle (run when modifying src/)
 npm run build
 ```
 
 - Tests isolate themselves from live Neon/OpenRouter by clearing `DATABASE_URL` and `OPENROUTER_API_KEY` via `monkeypatch` so they run fast and deterministically against the in-memory fallback.
-- When modifying `api/` files, always run `.venv/bin/pytest -q`.
-- When modifying `src/` files, always run `npm run build`.
+- Do not silence lint or type rules (`# noqa`, `# type: ignore`, `# ty: ignore`) unless you include a short inline comment explaining why.
 
 ---
 
 ## 5. Architecture & Implementation Conventions
+
+### Python Engineering Rules (`api/` & `tests/`)
+- **Modern Python (3.11+ syntax)**: Use built-in generics (`list[str]`, `dict[str, Any]`) and union syntax (`X | None`). Never import `List`, `Dict`, `Optional`, or `Union` from `typing`. Use `datetime.UTC` instead of `timezone.utc`.
+- **Keep `api/` flat (No structural drift)**: Extend the existing 6 modules (`api/index.py`, `api/db.py`, `api/workflow.py`, `api/privacy.py`, `api/openrouter.py`, `api/mcp_server.py`). Do not invent new subdirectories (`api/routers/`, `api/services/`, `api/utils/`) unless explicitly asked.
+- **One canonical tool per task (do not improvise alternatives)**:
+  - **Schemas & boundaries**: Pydantic v2 (`BaseModel` with `Field(...)`) for API/MCP request boundaries, `TypedDict` for LangGraph state (`TransitionState`), and `@dataclass(slots=True)` for simple internal objects.
+  - **HTTP client**: `httpx` with explicit timeouts. Never use `requests` or `urllib`.
+  - **File paths**: `pathlib.Path`. Never use `os.path`.
+  - **Strings & logging**: Use f-strings (never `%` or `.format()`) and `logging` (never leave `print()` in `api/`).
+  - **Tests**: `pytest` with plain `assert` statements and `monkeypatch` fixtures. Never use `unittest.TestCase`.
+- **Code & safety constraints**:
+  - Explicitly type all function parameters and return types.
+  - Never use mutable default arguments (`def f(x=[])`) or bare `except:`. Catch specific exceptions with context.
+  - Always use context managers (`with`) for files, HTTP clients, and database connections. Never mix blocking I/O into `async def` functions.
+  - Manage environments with `uv` (`pyproject.toml` is the source of truth), and keep `requirements.txt` in sync because Vercel's Python runtime installs from `requirements.txt`.
 
 ### Backend & Neon PostgreSQL (`api/`)
 - **Serverless pooling**: Runtime queries use `get_engine()` (`DATABASE_URL` pooled via Neon PgBouncer) with `NullPool` and `connect_args={"prepare_threshold": None}` (required for `psycopg` v3 on PgBouncer transaction mode).
 - **DDL & migrations**: Schema creation and seeding (`ensure_schema_and_seed()`) must use `get_direct_engine()` (`DATABASE_URL_UNPOOLED`) — never run DDL over the pooled connection.
 - **Dual storage parity**: `api/db.py` supports both Neon PostgreSQL and an in-memory fallback (`_MEMORY_STORE`, `_MEMORY_AUDIT`, `_MEMORY_EVIDENCE`) when `DATABASE_URL` is unset. Any new query or mutation in `api/db.py` must implement **both** paths identically.
 - **SSE streaming**: Streaming endpoints (`/api/transitions/*/stream`) run deterministic nodes 1–3 and persist updates first, emit `event: deterministic_complete`, stream `event: token` deltas from OpenRouter, and finish with `event: complete` (keeping `Cache-Control: no-cache` and `X-Accel-Buffering: no`).
-- **Python dependencies**: Keep `requirements.txt` and `pyproject.toml` in sync — Vercel's Python runtime installs from `requirements.txt`.
 
 ### Frontend (`src/`)
 - **Strict TypeScript**: `tsconfig.json` enforces `strict: true`, `noUnusedLocals: true`, and `noUnusedParameters: true`.
