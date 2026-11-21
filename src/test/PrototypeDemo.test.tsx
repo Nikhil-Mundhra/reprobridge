@@ -9,6 +9,11 @@ import {
   DOCS_PREFS_COOKIE,
   readDocsSessionPrefs,
 } from "../demo/docsSessionPrefs";
+import {
+  formatForSpeech,
+  getRankedEnglishVoices,
+  splitIntoSentences,
+} from "../demo/speechUtils";
 import PrototypeDemo, {
   SAMPLE_IMPORT_CSV,
   buildOutboundFhirBundle,
@@ -1175,16 +1180,59 @@ describe("<ClinicalMetricVisualizer /> clinical range bars", () => {
 });
 
 describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
-  it("opens floating AI Clinical Explainer from OBL-101 Explain button, plays SpeechSynthesis audio, and cancels on close", async () => {
+  it("ranks neural/Google voices above compact macOS voices and formats clinical terms for natural speech", () => {
+    const sampleVoices = [
+      { name: "Zarvox", lang: "en-US", voiceURI: "Zarvox", localService: true },
+      { name: "Fred", lang: "en-US", voiceURI: "Fred", localService: true },
+      { name: "Samantha", lang: "en-US", voiceURI: "Samantha", localService: true },
+      { name: "Daniel", lang: "en-GB", voiceURI: "Daniel", localService: true },
+      { name: "Google US English", lang: "en-US", voiceURI: "Google US English", localService: false },
+      { name: "Samantha (Enhanced)", lang: "en-US", voiceURI: "Samantha Enhanced", localService: true },
+      { name: "Microsoft Aria Online (Natural) - English (United States)", lang: "en-US", voiceURI: "Aria", localService: false },
+      { name: "Thomas", lang: "fr-FR", voiceURI: "Thomas", localService: true },
+    ] as SpeechSynthesisVoice[];
+
+    const ranked = getRankedEnglishVoices(sampleVoices);
+    expect(ranked.map((v) => v.name)).toEqual([
+      "Microsoft Aria Online (Natural) - English (United States)",
+      "Samantha (Enhanced)",
+      "Google US English",
+      "Daniel",
+      "Samantha",
+    ]);
+
+    const spoken = formatForSpeech(
+      "TSH 4.8 mIU/L (ESCALATED_FOR_REVIEW). T1 target 0.1–2.5 for OB-GYN."
+    );
+    expect(spoken).toBe(
+      "T S H 4.8 milli-international units per liter (escalated for review). trimester one target 0.1 to 2.5 for O B G Y N."
+    );
+    expect(splitIntoSentences(spoken)).toEqual([
+      "T S H 4.8 milli-international units per liter (escalated for review).",
+      "trimester one target 0.1 to 2.5 for O B G Y N.",
+    ]);
+  });
+
+  it("opens floating AI Clinical Explainer from OBL-101 Explain button, picks Google voice at 1x, chains sentences, and cancels on close", async () => {
     const user = userEvent.setup();
 
     const speakMock = vi.fn();
     const cancelMock = vi.fn();
     const pauseMock = vi.fn();
     const resumeMock = vi.fn();
-    const getVoicesMock = vi.fn(() => [
-      { name: "Samantha", lang: "en-US" } as SpeechSynthesisVoice,
-    ]);
+    const getVoicesMock = vi.fn(
+      () =>
+        [
+          { name: "Samantha", lang: "en-US", voiceURI: "Samantha", localService: true },
+          { name: "Fred", lang: "en-US", voiceURI: "Fred", localService: true },
+          {
+            name: "Google US English",
+            lang: "en-US",
+            voiceURI: "Google US English",
+            localService: false,
+          },
+        ] as SpeechSynthesisVoice[]
+    );
 
     const prevSpeech = Object.getOwnPropertyDescriptor(window, "speechSynthesis");
     const prevUtterance = (globalThis as { SpeechSynthesisUtterance?: unknown })
@@ -1195,6 +1243,7 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
       rate = 1;
       pitch = 1;
       voice: SpeechSynthesisVoice | null = null;
+      onend: (() => void) | null = null;
       constructor(text: string) {
         this.text = text;
       }
@@ -1208,6 +1257,8 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
         pause: pauseMock,
         resume: resumeMock,
         getVoices: getVoicesMock,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
       },
     });
     (globalThis as { SpeechSynthesisUtterance: unknown }).SpeechSynthesisUtterance = MockUtterance;
@@ -1234,7 +1285,7 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
           obligation_id: "OBL-101",
           headline: "Elevated Thyroid-Stimulating Hormone (Preconception)",
           explanation:
-            "TSH of 4.8 mIU/L sits above the 4.0 preconception upper limit and tightens below 2.5 in Trimester 1.",
+            "TSH of 4.8 mIU/L sits above the 4.0 preconception upper limit and tightens under 2.5 in Trimester 1.",
           key_points: ["Preconception cutoff is 4.0 mIU/L.", "Requires repeat TSH + free T4 review."],
           disclaimer: "Assistive de-identified explanation only — does not diagnose or prescribe.",
           ai_metadata: {
@@ -1271,11 +1322,24 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
       ).toBeInTheDocument();
       expect(within(explainer).getByText("UAE Firewall · 0 PHI")).toBeInTheDocument();
 
+      const voiceSelect = within(explainer).getByRole("combobox", { name: /Narrator voice/i });
+      expect(voiceSelect).toHaveValue("Google US English");
+      expect(within(voiceSelect).queryByRole("option", { name: "Fred" })).not.toBeInTheDocument();
+
       await user.click(within(explainer).getByRole("button", { name: /Listen/i }));
       expect(speakMock).toHaveBeenCalledTimes(1);
-      const spokenUtterance = speakMock.mock.calls[0][0] as MockUtterance;
-      expect(spokenUtterance.text).toContain("TSH of 4.8 mIU/L");
-      expect(spokenUtterance.rate).toBe(0.96);
+      const firstUtterance = speakMock.mock.calls[0][0] as MockUtterance;
+      expect(firstUtterance.rate).toBe(1);
+      expect(firstUtterance.voice?.name).toBe("Google US English");
+      expect(firstUtterance.text).toBe("Elevated Thyroid-Stimulating Hormone (Preconception).");
+
+      // Advance to next sentence after brief natural pause
+      firstUtterance.onend?.();
+      await waitFor(() => {
+        expect(speakMock).toHaveBeenCalledTimes(2);
+      });
+      const secondUtterance = speakMock.mock.calls[1][0] as MockUtterance;
+      expect(secondUtterance.text).toContain("T S H of 4.8 milli-international units per liter");
 
       await user.click(within(explainer).getByRole("button", { name: /Close AI explainer/i }));
       expect(cancelMock).toHaveBeenCalled();

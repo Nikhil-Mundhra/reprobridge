@@ -8,6 +8,11 @@ import {
   Volume2,
   X,
 } from "lucide-react";
+import {
+  formatForSpeech,
+  getRankedEnglishVoices,
+  splitIntoSentences,
+} from "./speechUtils";
 import type { Obligation, ObligationExplanationResponse } from "./types";
 
 interface ObligationExplainerPopoverProps {
@@ -21,7 +26,8 @@ interface ObligationExplainerPopoverProps {
 
 type AudioState = "idle" | "playing" | "paused";
 
-const RATE_OPTIONS = [0.96, 1.0, 1.15] as const;
+const RATE_OPTIONS = [1.0, 0.95, 1.1] as const;
+const SENTENCE_PAUSE_MS = 160;
 
 function isSpeechSupported(): boolean {
   return (
@@ -32,19 +38,14 @@ function isSpeechSupported(): boolean {
   );
 }
 
-function pickSmoothVoice(): SpeechSynthesisVoice | null {
-  try {
-    const voices = window.speechSynthesis.getVoices?.() ?? [];
-    if (voices.length === 0) return null;
-    const preferred = voices.find(
-      (v) =>
-        v.lang?.toLowerCase().startsWith("en") &&
-        /natural|neural|samantha|karen|daniel|google/i.test(v.name)
-    );
-    return preferred ?? voices.find((v) => v.lang?.toLowerCase().startsWith("en")) ?? null;
-  } catch {
-    return null;
-  }
+function getVoiceKey(voice: SpeechSynthesisVoice): string {
+  return voice.voiceURI || `${voice.name}|${voice.lang}`;
+}
+
+function ensureSentencePeriod(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 export default function ObligationExplainerPopover({
@@ -57,11 +58,43 @@ export default function ObligationExplainerPopover({
 }: ObligationExplainerPopoverProps) {
   const [audioState, setAudioState] = useState<AudioState>("idle");
   const [rateIndex, setRateIndex] = useState(0);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(() =>
+    isSpeechSupported()
+      ? getRankedEnglishVoices(window.speechSynthesis.getVoices?.() ?? [])
+      : []
+  );
+  const [selectedVoiceKey, setSelectedVoiceKey] = useState<string | null>(null);
+
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const pauseTimerRef = useRef<number | null>(null);
+  const playbackTokenRef = useRef(0);
+
   const speechAvailable = isSpeechSupported();
   const rate = RATE_OPTIONS[rateIndex];
+  const activeVoice =
+    voices.find((v) => getVoiceKey(v) === selectedVoiceKey) ?? voices[0] ?? null;
+
+  useEffect(() => {
+    if (!isSpeechSupported()) return;
+    const synth = window.speechSynthesis;
+
+    const refreshVoices = () => {
+      setVoices(getRankedEnglishVoices(synth.getVoices?.() ?? []));
+    };
+
+    refreshVoices();
+    synth.addEventListener?.("voiceschanged", refreshVoices);
+    return () => {
+      synth?.removeEventListener?.("voiceschanged", refreshVoices);
+    };
+  }, []);
 
   const stopSpeech = useCallback(() => {
+    playbackTokenRef.current += 1;
+    if (pauseTimerRef.current !== null) {
+      window.clearTimeout(pauseTimerRef.current);
+      pauseTimerRef.current = null;
+    }
     utteranceRef.current = null;
     setAudioState("idle");
     if (isSpeechSupported()) {
@@ -80,42 +113,90 @@ export default function ObligationExplainerPopover({
     };
   }, [obligation?.id, data?.explanation, stopSpeech]);
 
-  const speakAtRate = useCallback(
-    (targetRate: number) => {
+  const speakAtConfig = useCallback(
+    (targetRate: number, targetVoice: SpeechSynthesisVoice | null) => {
       if (!data || !isSpeechSupported()) return;
+
+      playbackTokenRef.current += 1;
+      const token = playbackTokenRef.current;
+
+      if (pauseTimerRef.current !== null) {
+        window.clearTimeout(pauseTimerRef.current);
+        pauseTimerRef.current = null;
+      }
 
       try {
         window.speechSynthesis.cancel();
-        const spokenParts = [
+
+        const rawParts = [
           data.headline,
           data.explanation,
           ...(data.key_points.length > 0 ? ["Key takeaways.", ...data.key_points] : []),
-        ].filter(Boolean);
+        ]
+          .map(ensureSentencePeriod)
+          .filter(Boolean);
 
-        const utterance = new SpeechSynthesisUtterance(spokenParts.join(" "));
-        utterance.rate = targetRate;
-        utterance.pitch = 1.0;
-
-        const voice = pickSmoothVoice();
-        if (voice) {
-          utterance.voice = voice;
+        const sentences = splitIntoSentences(formatForSpeech(rawParts.join(" ")));
+        if (sentences.length === 0) {
+          setAudioState("idle");
+          return;
         }
 
-        utterance.onstart = () => setAudioState("playing");
-        utterance.onpause = () => setAudioState("paused");
-        utterance.onresume = () => setAudioState("playing");
-        utterance.onend = () => {
-          utteranceRef.current = null;
-          setAudioState("idle");
-        };
-        utterance.onerror = () => {
-          utteranceRef.current = null;
-          setAudioState("idle");
+        const chosenVoice =
+          targetVoice ??
+          getRankedEnglishVoices(window.speechSynthesis.getVoices?.() ?? [])[0] ??
+          null;
+
+        const playSentence = (index: number) => {
+          if (playbackTokenRef.current !== token) return;
+          if (index >= sentences.length) {
+            utteranceRef.current = null;
+            setAudioState("idle");
+            return;
+          }
+
+          const utterance = new SpeechSynthesisUtterance(sentences[index]);
+          utterance.rate = targetRate;
+          utterance.pitch = 1.0;
+          if (chosenVoice) {
+            utterance.voice = chosenVoice;
+          }
+
+          utterance.onstart = () => {
+            if (playbackTokenRef.current === token) {
+              setAudioState("playing");
+            }
+          };
+          utterance.onpause = () => {
+            if (playbackTokenRef.current === token) {
+              setAudioState("paused");
+            }
+          };
+          utterance.onresume = () => {
+            if (playbackTokenRef.current === token) {
+              setAudioState("playing");
+            }
+          };
+          utterance.onend = () => {
+            if (playbackTokenRef.current !== token) return;
+            pauseTimerRef.current = window.setTimeout(() => {
+              pauseTimerRef.current = null;
+              playSentence(index + 1);
+            }, SENTENCE_PAUSE_MS);
+          };
+          utterance.onerror = () => {
+            if (playbackTokenRef.current === token) {
+              utteranceRef.current = null;
+              setAudioState("idle");
+            }
+          };
+
+          utteranceRef.current = utterance;
+          window.speechSynthesis.speak(utterance);
         };
 
-        utteranceRef.current = utterance;
-        window.speechSynthesis.speak(utterance);
         setAudioState("playing");
+        playSentence(0);
       } catch {
         utteranceRef.current = null;
         setAudioState("idle");
@@ -140,18 +221,26 @@ export default function ObligationExplainerPopover({
         window.speechSynthesis.resume?.();
         setAudioState("playing");
       } catch {
-        speakAtRate(rate);
+        speakAtConfig(rate, activeVoice);
       }
       return;
     }
-    speakAtRate(rate);
+    speakAtConfig(rate, activeVoice);
   }
 
   function handleCycleRate() {
     const nextIdx = (rateIndex + 1) % RATE_OPTIONS.length;
     setRateIndex(nextIdx);
     if (audioState === "playing") {
-      speakAtRate(RATE_OPTIONS[nextIdx]);
+      speakAtConfig(RATE_OPTIONS[nextIdx], activeVoice);
+    }
+  }
+
+  function handleVoiceChange(nextKey: string) {
+    setSelectedVoiceKey(nextKey);
+    const nextVoice = voices.find((v) => getVoiceKey(v) === nextKey) ?? null;
+    if (audioState === "playing" || audioState === "paused") {
+      speakAtConfig(rate, nextVoice);
     }
   }
 
@@ -269,7 +358,7 @@ export default function ObligationExplainerPopover({
                     {audioState !== "idle" && (
                       <button
                         type="button"
-                        onClick={() => speakAtRate(rate)}
+                        onClick={() => speakAtConfig(rate, activeVoice)}
                         aria-label="Replay audio explanation"
                         title="Replay from start"
                         className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-100"
@@ -287,7 +376,7 @@ export default function ObligationExplainerPopover({
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 {audioState === "playing" && (
                   <span
                     className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-700"
@@ -300,6 +389,23 @@ export default function ObligationExplainerPopover({
                     </span>
                     Speaking
                   </span>
+                )}
+                {speechAvailable && voices.length > 0 && (
+                  <select
+                    aria-label="Narrator voice"
+                    value={activeVoice ? getVoiceKey(activeVoice) : ""}
+                    onChange={(e) => handleVoiceChange(e.target.value)}
+                    className="max-w-[140px] truncate rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-700 transition hover:border-teal-300 focus:border-teal-500 focus:outline-none"
+                  >
+                    {voices.map((voice) => {
+                      const key = getVoiceKey(voice);
+                      return (
+                        <option key={key} value={key}>
+                          {voice.name}
+                        </option>
+                      );
+                    })}
+                  </select>
                 )}
                 {speechAvailable && (
                   <button
