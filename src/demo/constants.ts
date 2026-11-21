@@ -1,4 +1,49 @@
-import type { FacilityStage } from "./types";
+import type { FacilityStage, PatientCohortSummary } from "./types";
+
+export const DEFAULT_PATIENT_COHORT: PatientCohortSummary[] = [
+  {
+    patient_id: "PAT-AE-4092",
+    patient_name: "Amina Al-Mansoori (Synthetic)",
+    age_sex: "32Y · F",
+    clinical_track: "Endocrine & Rubella Continuity",
+    facility_a: "Mubadala Primary Care",
+    facility_b: "Corniche OB-GYN",
+    life_stage: "Preconception",
+    total_obligations: 2,
+    open_count: 2,
+    urgent_count: 0,
+    deferred_count: 0,
+    closed_count: 0,
+  },
+  {
+    patient_id: "PAT-AE-5180",
+    patient_name: "Fatima Al-Zaabi (Synthetic)",
+    age_sex: "29Y · F",
+    clinical_track: "Metabolic & Varicella Continuity",
+    facility_a: "Al Bateen Primary Clinic",
+    facility_b: "Corniche OB-GYN",
+    life_stage: "Preconception",
+    total_obligations: 2,
+    open_count: 2,
+    urgent_count: 0,
+    deferred_count: 0,
+    closed_count: 0,
+  },
+  {
+    patient_id: "PAT-AE-6304",
+    patient_name: "Sara Al-Nuaimi (Synthetic)",
+    age_sex: "36Y · F",
+    clinical_track: "Preeclampsia & HPV Continuity",
+    facility_a: "Khalifa City Family Medicine",
+    facility_b: "Danat Al Emarat Maternity",
+    life_stage: "Preconception",
+    total_obligations: 2,
+    open_count: 2,
+    urgent_count: 0,
+    deferred_count: 0,
+    closed_count: 0,
+  },
+];
 
 export const SAMPLE_IMPORT_CSV = `title,rationale,priority,life_stage,owner,evidence_source,incoming_evidence_result
 Gestational Diabetes OGTT Follow-up,Elevated 1-hour glucose challenge (152 mg/dL); requires 3-hour 100g OGTT confirmation.,HIGH,Antenatal (Trimester 1),OB-GYN / Endocrinology,FHIR Observation/obs-ogtt-2026-10,3-hour OGTT normal across all 4 draws (fasting 84 mg/dL)
@@ -93,6 +138,80 @@ export const SYNTHETIC_FHIR_RECORDS: Record<string, Record<string, unknown>> = {
       "Rubella IgG Non-Immune (<5 IU/mL). Recommend MMR immunization prior to pregnancy or postpartum.",
     meta: { source: "urn:malaffi:hie:synthetic-preconception-serology" },
   },
+  "OBL-201": {
+    resourceType: "Observation",
+    id: "obs-hba1c-2026-09",
+    status: "final",
+    code: {
+      coding: [
+        {
+          system: "http://loinc.org",
+          code: "4548-4",
+          display: "Hemoglobin A1c/Hemoglobin.total in Blood",
+        },
+      ],
+    },
+    subject: { reference: "Patient/PAT-AE-5180" },
+    effectiveDateTime: "2026-09-18T08:45:00+04:00",
+    valueQuantity: { value: 6.1, unit: "%", system: "http://unitsofmeasure.org", code: "%" },
+    interpretation: [{ coding: [{ code: "H", display: "Prediabetes / Impaired" }] }],
+    meta: { source: "urn:malaffi:hie:synthetic-albateen-lab" },
+  },
+  "OBL-202": {
+    resourceType: "DiagnosticReport",
+    id: "rep-vzv-2026-08",
+    status: "final",
+    code: {
+      coding: [
+        {
+          system: "http://loinc.org",
+          code: "15410-4",
+          display: "Varicella zoster virus IgG Ab [Units/volume] in Serum",
+        },
+      ],
+    },
+    subject: { reference: "Patient/PAT-AE-5180" },
+    effectiveDateTime: "2026-08-27T10:20:00+04:00",
+    conclusion:
+      "VZV IgG Non-Immune (<100 mIU/mL). Live Varicella vaccine deferred if pregnant; vaccinate postpartum.",
+    meta: { source: "urn:malaffi:hie:synthetic-albateen-serology" },
+  },
+  "OBL-301": {
+    resourceType: "Observation",
+    id: "obs-bp-2026-09",
+    status: "final",
+    code: {
+      coding: [
+        {
+          system: "http://loinc.org",
+          code: "85354-9",
+          display: "Blood pressure panel with all children optional",
+        },
+      ],
+    },
+    subject: { reference: "Patient/PAT-AE-6304" },
+    effectiveDateTime: "2026-09-21T11:10:00+04:00",
+    component: [
+      { code: { text: "Systolic BP" }, valueQuantity: { value: 138, unit: "mmHg" } },
+      { code: { text: "Diastolic BP" }, valueQuantity: { value: 88, unit: "mmHg" } },
+    ],
+    meta: { source: "urn:malaffi:hie:synthetic-khalifacity-vitals" },
+  },
+  "OBL-302": {
+    resourceType: "ImmunizationRecommendation",
+    id: "rec-hpv-2026-08",
+    patient: { reference: "Patient/PAT-AE-6304" },
+    date: "2026-08-29T09:00:00+04:00",
+    recommendation: [
+      {
+        vaccineCode: [{ coding: [{ system: "http://hl7.org/fhir/sid/cvx", code: "165", display: "HPV 9-valent" }] }],
+        doseNumberPositiveInt: 2,
+        seriesDosesPositiveInt: 3,
+        forecastStatus: { text: "Due (Defer during pregnancy; complete postpartum)" },
+      },
+    ],
+    meta: { source: "urn:malaffi:hie:synthetic-immunization-registry" },
+  },
 };
 
 export const AUDIT_EVENT_META: Record<
@@ -168,6 +287,50 @@ export const FACILITY_CONTINUITY_STAGES: FacilityStage[] = [
     emrSystem: "Inpatient",
   },
 ];
+
+export const PATIENT_FACILITY_STAGES: Record<string, FacilityStage[]> = {
+  "PAT-AE-4092": FACILITY_CONTINUITY_STAGES,
+  "PAT-AE-5180": [
+    {
+      stageIndex: 0,
+      dayTag: "Day 0",
+      facility: "Al Bateen Primary Clinic",
+      emrSystem: "Epic",
+    },
+    {
+      stageIndex: 1,
+      dayTag: "Day 98",
+      facility: "Corniche OB-GYN",
+      emrSystem: "Oracle",
+    },
+    {
+      stageIndex: 2,
+      dayTag: "Day 372",
+      facility: "Corniche Maternity Ward",
+      emrSystem: "Inpatient",
+    },
+  ],
+  "PAT-AE-6304": [
+    {
+      stageIndex: 0,
+      dayTag: "Day 0",
+      facility: "Khalifa City Family Medicine",
+      emrSystem: "Epic",
+    },
+    {
+      stageIndex: 1,
+      dayTag: "Day 112",
+      facility: "Danat Al Emarat Maternity",
+      emrSystem: "Oracle",
+    },
+    {
+      stageIndex: 2,
+      dayTag: "Day 386",
+      facility: "Danat Al Emarat Postpartum",
+      emrSystem: "Inpatient",
+    },
+  ],
+};
 
 export const PRIORITY_STYLES: Record<string, string> = {
   URGENT: "bg-rose-100 text-rose-800 border-rose-200",

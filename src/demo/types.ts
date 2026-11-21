@@ -101,3 +101,18 @@ export interface SafetyBlockInfo {
   status: number;
   ruleVersion: string;
 }
+
+export interface PatientCohortSummary {
+  patient_id: string;
+  patient_name: string;
+  age_sex: string;
+  clinical_track: string;
+  facility_a: string;
+  facility_b: string;
+  life_stage: string;
+  total_obligations: number;
+  open_count: number;
+  urgent_count: number;
+  deferred_count: number;
+  closed_count: number;
+}

@@ -114,6 +114,10 @@ export function parseHandoffItems(text: string): string[] {
 export function detectObligationId(text: string): string | null {
   const match = text.match(/\bOBL-\d+\b/i);
   if (match) return match[0].toUpperCase();
+  if (/dysglycemia|ogtt|hba1c|RB-METABOLIC/i.test(text)) return "OBL-201";
+  if (/varicella|vzv/i.test(text)) return "OBL-202";
+  if (/preeclampsia|aspirin|RB-PREECLAMPSIA/i.test(text)) return "OBL-301";
+  if (/hpv|RB-HPV/i.test(text)) return "OBL-302";
   if (/thyroid|tsh|RB-THYROID/i.test(text)) return "OBL-101";
   if (/rubella|mmr|vaccin|RB-IMMUNE/i.test(text)) return "OBL-102";
   return null;

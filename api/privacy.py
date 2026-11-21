@@ -36,7 +36,10 @@ _PATIENT_ID_RE = re.compile(r"\bPAT-[A-Z]{2}-\d+\b")
 # Controlled clinical category mapping so raw free-text titles/notes are not required by LLMs.
 _CLINICAL_CATEGORIES: dict[str, str] = {
     "RB-THYROID-v1.4.0": "subclinical_hypothyroidism_tsh_followup",
-    "RB-IMMUNE-v1.2.1": "rubella_igg_non_immune_vaccination",
+    "RB-IMMUNE-v1.2.1": "live_vaccine_non_immune_deferral",
+    "RB-METABOLIC-v1.2.0": "gestational_dysglycemia_ogtt_followup",
+    "RB-PREECLAMPSIA-v1.3.0": "preeclampsia_aspirin_prophylaxis_window",
+    "RB-HPV-v1.1.0": "hpv_series_postpartum_completion",
 }
 
 

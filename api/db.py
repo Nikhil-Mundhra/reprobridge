@@ -113,6 +113,36 @@ def get_direct_engine() -> Engine | None:
     )
 
 
+PATIENT_COHORT_META: dict[str, dict[str, Any]] = {
+    "PAT-AE-4092": {
+        "patient_id": "PAT-AE-4092",
+        "patient_name": "Amina Al-Mansoori (Synthetic)",
+        "age_sex": "32Y · F",
+        "clinical_track": "Endocrine & Rubella Continuity",
+        "facility_a": "Mubadala Primary Care",
+        "facility_b": "Corniche OB-GYN",
+        "id_base": 100,
+    },
+    "PAT-AE-5180": {
+        "patient_id": "PAT-AE-5180",
+        "patient_name": "Fatima Al-Zaabi (Synthetic)",
+        "age_sex": "29Y · F",
+        "clinical_track": "Metabolic & Varicella Continuity",
+        "facility_a": "Al Bateen Primary Clinic",
+        "facility_b": "Corniche OB-GYN",
+        "id_base": 200,
+    },
+    "PAT-AE-6304": {
+        "patient_id": "PAT-AE-6304",
+        "patient_name": "Sara Al-Nuaimi (Synthetic)",
+        "age_sex": "36Y · F",
+        "clinical_track": "Preeclampsia & HPV Continuity",
+        "facility_a": "Khalifa City Family Medicine",
+        "facility_b": "Danat Al Emarat Maternity",
+        "id_base": 300,
+    },
+}
+
 SEED_OBLIGATIONS: list[dict[str, Any]] = [
     {
         "id": "OBL-101",
@@ -152,6 +182,87 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
     },
 ]
 
+ADDITIONAL_SEED_OBLIGATIONS: list[dict[str, Any]] = [
+    {
+        "id": "OBL-201",
+        "patient_id": "PAT-AE-5180",
+        "patient_name": "Fatima Al-Zaabi (Synthetic)",
+        "life_stage": "Preconception",
+        "title": "Preconception Dysglycemia Follow-up (Fasting Glucose 112 mg/dL · HbA1c 6.1%)",
+        "rationale": (
+            "Preconception panel showed impaired fasting glucose (112 mg/dL) and HbA1c 6.1%. "
+            "Requires early first-trimester 75g OGTT and medical nutrition / endocrine titration "
+            "upon pregnancy confirmation."
+        ),
+        "evidence_source": "FHIR Observation/obs-hba1c-2026-09 (Malaffi HIE Synthetic)",
+        "rule_version": "RB-METABOLIC-v1.2.0",
+        "owner": "Primary Care / Endocrinology",
+        "status": "OPEN",
+        "priority": "HIGH",
+        "verified_by": None,
+        "closure_evidence": None,
+    },
+    {
+        "id": "OBL-202",
+        "patient_id": "PAT-AE-5180",
+        "patient_name": "Fatima Al-Zaabi (Synthetic)",
+        "life_stage": "Preconception",
+        "title": "Varicella-Zoster (VZV) IgG Non-Immune Vaccination Verification",
+        "rationale": (
+            "Preconception serology indicated VZV IgG non-immune status (<100 mIU/mL). "
+            "Live-attenuated Varicella vaccine is contraindicated during pregnancy; defer to "
+            "postpartum pre-discharge pathway."
+        ),
+        "evidence_source": "FHIR DiagnosticReport/rep-vzv-2026-08",
+        "rule_version": "RB-IMMUNE-v1.2.1",
+        "owner": "Preventive Care Nurse",
+        "status": "OPEN",
+        "priority": "MEDIUM",
+        "verified_by": None,
+        "closure_evidence": None,
+    },
+    {
+        "id": "OBL-301",
+        "patient_id": "PAT-AE-6304",
+        "patient_name": "Sara Al-Nuaimi (Synthetic)",
+        "life_stage": "Preconception",
+        "title": "Preeclampsia Low-Dose Aspirin Prophylaxis Window (BP 138/88 mmHg)",
+        "rationale": (
+            "History of prior preterm preeclampsia and baseline BP 138/88 mmHg. Requires low-dose "
+            "aspirin (150 mg nightly) initiated between 12 and 16 weeks gestation before placental "
+            "remodeling window closes."
+        ),
+        "evidence_source": "FHIR Observation/obs-bp-2026-09 (Malaffi HIE Synthetic)",
+        "rule_version": "RB-PREECLAMPSIA-v1.3.0",
+        "owner": "Primary Care / Maternal-Fetal Medicine",
+        "status": "OPEN",
+        "priority": "HIGH",
+        "verified_by": None,
+        "closure_evidence": None,
+    },
+    {
+        "id": "OBL-302",
+        "patient_id": "PAT-AE-6304",
+        "patient_name": "Sara Al-Nuaimi (Synthetic)",
+        "life_stage": "Preconception",
+        "title": "Incomplete HPV 9-Valent Immunization Series (Dose 2 of 3)",
+        "rationale": (
+            "Preconception immunization review showed HPV 9-valent series incomplete (1 of 3 doses "
+            "received). Routine HPV vaccination is deferred during pregnancy; resume series "
+            "immediately postpartum."
+        ),
+        "evidence_source": "FHIR ImmunizationRecommendation/rec-hpv-2026-08",
+        "rule_version": "RB-HPV-v1.1.0",
+        "owner": "Preventive Care Nurse",
+        "status": "OPEN",
+        "priority": "MEDIUM",
+        "verified_by": None,
+        "closure_evidence": None,
+    },
+]
+
+ALL_SEED_OBLIGATIONS: list[dict[str, Any]] = SEED_OBLIGATIONS + ADDITIONAL_SEED_OBLIGATIONS
+
 SEED_AUDIT_EVENTS: list[dict[str, Any]] = [
     {
         "obligation_id": "OBL-101",
@@ -164,6 +275,30 @@ SEED_AUDIT_EVENTS: list[dict[str, Any]] = [
         "event_type": "CARE_GAP_DETECTED",
         "actor": "RuleEngine (RB-IMMUNE-v1.2.1)",
         "summary": "Logged Rubella IgG non-immune obligation from FHIR DiagnosticReport/rep-rubella-2026-08.",
+    },
+    {
+        "obligation_id": "OBL-201",
+        "event_type": "CARE_GAP_DETECTED",
+        "actor": "RuleEngine (RB-METABOLIC-v1.2.0)",
+        "summary": "Logged preconception dysglycemia (HbA1c 6.1%, FBG 112 mg/dL) obligation from FHIR Observation/obs-hba1c-2026-09.",
+    },
+    {
+        "obligation_id": "OBL-202",
+        "event_type": "CARE_GAP_DETECTED",
+        "actor": "RuleEngine (RB-IMMUNE-v1.2.1)",
+        "summary": "Logged Varicella (VZV) IgG non-immune obligation from FHIR DiagnosticReport/rep-vzv-2026-08.",
+    },
+    {
+        "obligation_id": "OBL-301",
+        "event_type": "CARE_GAP_DETECTED",
+        "actor": "RuleEngine (RB-PREECLAMPSIA-v1.3.0)",
+        "summary": "Logged preeclampsia low-dose aspirin window obligation (BP 138/88 mmHg) from FHIR Observation/obs-bp-2026-09.",
+    },
+    {
+        "obligation_id": "OBL-302",
+        "event_type": "CARE_GAP_DETECTED",
+        "actor": "RuleEngine (RB-HPV-v1.1.0)",
+        "summary": "Logged incomplete HPV 9-valent series (Dose 2/3) from FHIR ImmunizationRecommendation/rec-hpv-2026-08.",
     },
 ]
 
@@ -198,10 +333,70 @@ SEED_CLINICAL_EVIDENCE: list[dict[str, Any]] = [
             "Registry #MAL-IMM-2026-55901); recorded in Malaffi Immunization Registry."
         ),
     },
+    {
+        "id": "EVD-OGTT-2026-10",
+        "obligation_id": "OBL-201",
+        "fhir_resource_type": "Observation",
+        "code_display": "75g Oral Glucose Tolerance Test (OGTT) + HbA1c [LOINC 14749-6]",
+        "result_value": "Fasting 89 mg/dL · 1h 164 mg/dL · 2h 138 mg/dL · MNT initiated",
+        "reference_range": "IADPSG Antenatal Targets (<92 / <180 / <153 mg/dL)",
+        "source_facility": "Corniche OB-GYN · Malaffi HIE",
+        "accession_id": "MAL-LAB-2026-91204",
+        "clinician_suggestion": "Dr. Noura Al-Ketbi (Maternal Endocrinology)",
+        "summary_note": (
+            "Early antenatal 75g OGTT within glycemic targets (89/164/138 mg/dL, Accession "
+            "#MAL-LAB-2026-91204); medical nutrition therapy & SMBG plan documented."
+        ),
+    },
+    {
+        "id": "EVD-VZV-2026-11",
+        "obligation_id": "OBL-202",
+        "fhir_resource_type": "Immunization",
+        "code_display": "Varicella Virus Live Vaccine [CVX 21]",
+        "result_value": "0.5 mL SC Dose 1 administered pre-discharge (Lot #VZV-2026-AE)",
+        "reference_range": "Postpartum contraindication lifted",
+        "source_facility": "Corniche Hospital Abu Dhabi · Malaffi Immunization Registry",
+        "accession_id": "MAL-IMM-2026-60418",
+        "clinician_suggestion": "Dr. Mariam Al-Suwaidi (Postpartum OB-GYN)",
+        "summary_note": (
+            "Postpartum Varicella Dose 1 administered prior to discharge (Lot #VZV-2026-AE, "
+            "Registry #MAL-IMM-2026-60418); Dose 2 scheduled at 4–8 weeks."
+        ),
+    },
+    {
+        "id": "EVD-ASA-2026-10",
+        "obligation_id": "OBL-301",
+        "fhir_resource_type": "MedicationRequest",
+        "code_display": "Aspirin 150 mg Enteric-Coated Tablet (Preeclampsia Prophylaxis)",
+        "result_value": "Initiated at 12w4d gestation · Home BP 124/78 mmHg",
+        "reference_range": "Start 12–16 weeks gestation",
+        "source_facility": "Danat Al Emarat Maternity · Malaffi e-Rx",
+        "accession_id": "MAL-RX-2026-77310",
+        "clinician_suggestion": "Dr. Layla Al-Hashimi (MFM / OB-GYN)",
+        "summary_note": (
+            "Low-dose aspirin 150 mg nightly initiated at 12w4d within prophylaxis window "
+            "(Malaffi e-Rx #MAL-RX-2026-77310); repeat BP 124/78 mmHg stabilized."
+        ),
+    },
+    {
+        "id": "EVD-HPV-2026-11",
+        "obligation_id": "OBL-302",
+        "fhir_resource_type": "Immunization",
+        "code_display": "HPV 9-Valent Recombinant Vaccine (Dose 2 of 3) [CVX 165]",
+        "result_value": "0.5 mL IM Dose 2 administered pre-discharge (Lot #HPV-2026-AE)",
+        "reference_range": "Postpartum deferral lifted",
+        "source_facility": "Danat Al Emarat Postpartum Clinic · Malaffi Immunization Registry",
+        "accession_id": "MAL-IMM-2026-71892",
+        "clinician_suggestion": "Dr. Mariam Al-Suwaidi (Postpartum OB-GYN)",
+        "summary_note": (
+            "Postpartum HPV 9-valent Dose 2 administered pre-discharge (Lot #HPV-2026-AE, "
+            "Registry #MAL-IMM-2026-71892); Dose 3 scheduled in 4 months."
+        ),
+    },
 ]
 
 _MEMORY_STORE: list[dict[str, Any]] = [
-    {**item, "updated_at": datetime.now(timezone.utc)} for item in SEED_OBLIGATIONS
+    {**item, "updated_at": datetime.now(timezone.utc)} for item in ALL_SEED_OBLIGATIONS
 ]
 _MEMORY_AUDIT: list[dict[str, Any]] = [
     {"id": idx + 1, **item, "created_at": datetime.now(timezone.utc)}
@@ -223,22 +418,35 @@ def ensure_schema_and_seed() -> None:
     metadata.create_all(direct_engine)
     now = datetime.now(timezone.utc)
     with direct_engine.begin() as conn:
-        existing = conn.execute(select(obligations_table.c.id).limit(1)).first()
-        if existing is None:
-            conn.execute(
-                obligations_table.insert(),
-                [{**item, "updated_at": now} for item in SEED_OBLIGATIONS],
-            )
-            conn.execute(
-                audit_events_table.insert(),
-                [{**item, "created_at": now} for item in SEED_AUDIT_EVENTS],
-            )
-        existing_ev = conn.execute(select(clinical_evidence_table.c.id).limit(1)).first()
-        if existing_ev is None:
-            conn.execute(
-                clinical_evidence_table.insert(),
-                [{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE],
-            )
+        existing_ids = {
+            row[0] for row in conn.execute(select(obligations_table.c.id)).all()
+        }
+        missing_obls = [
+            {**item, "updated_at": now}
+            for item in ALL_SEED_OBLIGATIONS
+            if item["id"] not in existing_ids
+        ]
+        if missing_obls:
+            conn.execute(obligations_table.insert(), missing_obls)
+            missing_ids = {item["id"] for item in missing_obls}
+            missing_audits = [
+                {**ev, "created_at": now}
+                for ev in SEED_AUDIT_EVENTS
+                if ev["obligation_id"] in missing_ids
+            ]
+            if missing_audits:
+                conn.execute(audit_events_table.insert(), missing_audits)
+
+        existing_ev_ids = {
+            row[0] for row in conn.execute(select(clinical_evidence_table.c.id)).all()
+        }
+        missing_ev = [
+            {**item, "recorded_at": now}
+            for item in SEED_CLINICAL_EVIDENCE
+            if item["id"] not in existing_ev_ids
+        ]
+        if missing_ev:
+            conn.execute(clinical_evidence_table.insert(), missing_ev)
     _schema_initialized = True
 
 
@@ -269,16 +477,81 @@ def check_database_health() -> dict[str, Any]:
         }
 
 
-def list_obligations() -> list[dict[str, Any]]:
+def list_obligations(patient_id: str | None = None) -> list[dict[str, Any]]:
     engine = get_engine()
     if engine is None:
-        return [dict(item) for item in _MEMORY_STORE]
+        items = [dict(item) for item in _MEMORY_STORE]
+        if patient_id and patient_id != "ALL":
+            items = [item for item in items if item.get("patient_id") == patient_id]
+        return sorted(items, key=lambda item: str(item.get("id", "")))
     ensure_schema_and_seed()
     with engine.connect() as conn:
-        rows = conn.execute(
-            select(obligations_table).order_by(obligations_table.c.id)
-        ).mappings()
+        stmt = select(obligations_table).order_by(obligations_table.c.id)
+        if patient_id and patient_id != "ALL":
+            stmt = stmt.where(obligations_table.c.patient_id == patient_id)
+        rows = conn.execute(stmt).mappings()
         return [dict(row) for row in rows]
+
+
+def _derive_life_stage(obligations: list[dict[str, Any]]) -> str:
+    if any(o.get("life_stage") == "Postpartum" for o in obligations):
+        return "Postpartum"
+    if any(str(o.get("life_stage", "")).startswith("Antenatal") for o in obligations):
+        return "Antenatal (Trimester 1)"
+    if obligations:
+        return str(obligations[0].get("life_stage") or "Preconception")
+    return "Preconception"
+
+
+def list_patient_summaries() -> list[dict[str, Any]]:
+    """Aggregate obligation counts and active life stage per patient in cohort order."""
+    all_rows = list_obligations(patient_id="ALL")
+    by_patient: dict[str, list[dict[str, Any]]] = {}
+    for row in all_rows:
+        pid = str(row.get("patient_id", "PAT-AE-4092"))
+        by_patient.setdefault(pid, []).append(row)
+
+    ordered_ids = list(PATIENT_COHORT_META.keys())
+    for pid in by_patient:
+        if pid not in PATIENT_COHORT_META:
+            ordered_ids.append(pid)
+
+    summaries: list[dict[str, Any]] = []
+    for pid in ordered_ids:
+        rows = by_patient.get(pid, [])
+        meta = PATIENT_COHORT_META.get(pid, {})
+        patient_name = (
+            meta.get("patient_name")
+            or (rows[0].get("patient_name") if rows else None)
+            or f"Patient {pid}"
+        )
+        summaries.append(
+            {
+                "patient_id": pid,
+                "patient_name": patient_name,
+                "age_sex": meta.get("age_sex", "Adult · F"),
+                "clinical_track": meta.get("clinical_track", "Preventive Care Continuity"),
+                "facility_a": meta.get("facility_a", "Primary Care Clinic"),
+                "facility_b": meta.get("facility_b", "OB-GYN Specialist Center"),
+                "life_stage": _derive_life_stage(rows),
+                "total_obligations": len(rows),
+                "open_count": sum(
+                    1
+                    for r in rows
+                    if r.get("status") not in {"VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM"}
+                ),
+                "urgent_count": sum(
+                    1
+                    for r in rows
+                    if r.get("priority") == "URGENT" and r.get("status") != "VERIFIED_CLOSED"
+                ),
+                "deferred_count": sum(
+                    1 for r in rows if r.get("status") == "DEFERRED_TO_POSTPARTUM"
+                ),
+                "closed_count": sum(1 for r in rows if r.get("status") == "VERIFIED_CLOSED"),
+            }
+        )
+    return summaries
 
 
 def list_audit_events() -> list[dict[str, Any]]:
@@ -423,13 +696,13 @@ def create_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
     return dict(record)
 
 
-def reset_obligations() -> dict[str, Any]:
+def reset_obligations(patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
     """Reset synthetic demo data back to initial preconception state."""
     now = datetime.now(timezone.utc)
     engine = get_engine()
     if engine is None:
         _MEMORY_STORE.clear()
-        _MEMORY_STORE.extend([{**item, "updated_at": now} for item in SEED_OBLIGATIONS])
+        _MEMORY_STORE.extend([{**item, "updated_at": now} for item in ALL_SEED_OBLIGATIONS])
         _MEMORY_AUDIT.clear()
         _MEMORY_AUDIT.extend(
             [
@@ -439,28 +712,36 @@ def reset_obligations() -> dict[str, Any]:
         )
         _MEMORY_EVIDENCE.clear()
         _MEMORY_EVIDENCE.extend([{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE])
-        return {
-            "obligations": [dict(item) for item in _MEMORY_STORE],
-            "audit_events": list_audit_events(),
-        }
-    ensure_schema_and_seed()
-    with engine.begin() as conn:
-        conn.execute(obligations_table.delete())
-        conn.execute(audit_events_table.delete())
-        conn.execute(clinical_evidence_table.delete())
-        conn.execute(
-            obligations_table.insert(),
-            [{**item, "updated_at": now} for item in SEED_OBLIGATIONS],
-        )
-        conn.execute(
-            audit_events_table.insert(),
-            [{**item, "created_at": now} for item in SEED_AUDIT_EVENTS],
-        )
-        conn.execute(
-            clinical_evidence_table.insert(),
-            [{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE],
-        )
+    else:
+        ensure_schema_and_seed()
+        with engine.begin() as conn:
+            conn.execute(obligations_table.delete())
+            conn.execute(audit_events_table.delete())
+            conn.execute(clinical_evidence_table.delete())
+            conn.execute(
+                obligations_table.insert(),
+                [{**item, "updated_at": now} for item in ALL_SEED_OBLIGATIONS],
+            )
+            conn.execute(
+                audit_events_table.insert(),
+                [{**item, "created_at": now} for item in SEED_AUDIT_EVENTS],
+            )
+            conn.execute(
+                clinical_evidence_table.insert(),
+                [{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE],
+            )
+
+    obls = list_obligations(patient_id=patient_id)
+    obl_ids = {o["id"] for o in obls}
+    all_events = list_audit_events()
+    filtered_events = (
+        all_events
+        if patient_id == "ALL"
+        else [e for e in all_events if e.get("obligation_id") in obl_ids or e.get("obligation_id") is None]
+    )
     return {
-        "obligations": list_obligations(),
-        "audit_events": list_audit_events(),
+        "patient_id": patient_id,
+        "obligations": obls,
+        "audit_events": filtered_events,
+        "patients": list_patient_summaries(),
     }

@@ -8,13 +8,16 @@ import FhirExportModal from "./demo/FhirExportModal";
 import ObligationIntakeModal from "./demo/ObligationIntakeModal";
 import ObligationPassportSection from "./demo/ObligationPassportSection";
 import OrchestratorHarnessSection from "./demo/OrchestratorHarnessSection";
+import PatientCohortBar from "./demo/PatientCohortBar";
 import VerifyClosureModal from "./demo/VerifyClosureModal";
+import { DEFAULT_PATIENT_COHORT } from "./demo/constants";
 import { parseStreamedSections } from "./demo/helpers";
 import type {
   AiMetadata,
   AuditEvent,
   HealthResponse,
   Obligation,
+  PatientCohortSummary,
   PrivacyReport,
   PrototypeDemoProps,
   SafetyBlockInfo,
@@ -33,7 +36,18 @@ export {
   parseStreamedSections,
 } from "./demo/helpers";
 
+const SEEDED_OBLIGATION_IDS = new Set([
+  "OBL-101",
+  "OBL-102",
+  "OBL-201",
+  "OBL-202",
+  "OBL-301",
+  "OBL-302",
+]);
+
 export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) {
+  const [selectedPatientId, setSelectedPatientId] = useState("PAT-AE-4092");
+  const [patients, setPatients] = useState<PatientCohortSummary[]>(DEFAULT_PATIENT_COHORT);
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -76,20 +90,23 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   }
 
   const totalClinicalDocCount =
-    5 + obligations.filter((o) => o.id !== "OBL-101" && o.id !== "OBL-102").length;
+    5 + obligations.filter((o) => !SEEDED_OBLIGATION_IDS.has(o.id)).length;
 
-  async function loadData() {
+  async function loadData(targetPatientId = selectedPatientId) {
     try {
       setError(null);
       const [hRes, oRes] = await Promise.all([
         fetch("/api/health"),
-        fetch("/api/obligations"),
+        fetch(`/api/obligations?patient_id=${encodeURIComponent(targetPatientId)}`),
       ]);
       if (hRes.ok) setHealth(await hRes.json());
       if (oRes.ok) {
         const data = await oRes.json();
         setObligations(data.obligations ?? []);
         setAuditEvents(data.audit_events ?? []);
+        if (Array.isArray(data.patients) && data.patients.length > 0) {
+          setPatients(data.patients);
+        }
       } else {
         setError(`ReproBridge API returned HTTP ${oRes.status} while loading obligations.`);
       }
@@ -101,8 +118,24 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   }
 
   useEffect(() => {
-    void loadData();
+    void loadData("PAT-AE-4092");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function handleSelectPatient(patientId: string) {
+    if (patientId === selectedPatientId) return;
+    setSelectedPatientId(patientId);
+    setAgentSummary(null);
+    setSpecialistHandoff(null);
+    setAiMetadata(null);
+    setPrivacyReport(null);
+    setTrace([]);
+    setSafetyBlockFeedback({});
+    setVerifyTarget(null);
+    setShowFhirExportModal(false);
+    setError(null);
+    void loadData(patientId);
+  }
 
   useEffect(() => {
     const onEscape = (e: KeyboardEvent) => {
@@ -139,10 +172,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setError(null);
 
     try {
-      const res = await fetch(`${endpoint}/stream`, {
-        method: "POST",
-        headers: { Accept: "text/event-stream" },
-      });
+      const res = await fetch(
+        `${endpoint}/stream?patient_id=${encodeURIComponent(selectedPatientId)}`,
+        {
+          method: "POST",
+          headers: { Accept: "text/event-stream" },
+        }
+      );
       if (!res.ok || !res.body) {
         const errBody = await res.json().catch(() => ({}));
         throw new Error(
@@ -172,6 +208,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         if (eventName === "deterministic_complete") {
           setObligations(payload.obligations ?? []);
           setAuditEvents(payload.audit_events ?? []);
+          if (Array.isArray(payload.patients) && payload.patients.length > 0) {
+            setPatients(payload.patients);
+          }
           setPrivacyReport(payload.privacy_report ?? null);
           setTrace(payload.trace ?? []);
           setStreamingPhase("UAE Firewall verified (0 PHI) · Streaming OpenRouter synthesis…");
@@ -184,6 +223,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         } else if (eventName === "complete") {
           setObligations(payload.obligations ?? []);
           setAuditEvents(payload.audit_events ?? []);
+          if (Array.isArray(payload.patients) && payload.patients.length > 0) {
+            setPatients(payload.patients);
+          }
           setAgentSummary(payload.agent_summary ?? null);
           setSpecialistHandoff(payload.specialist_handoff ?? null);
           setAiMetadata(payload.ai_metadata ?? null);
@@ -238,7 +280,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
               "Clinical safety guard blocked premature closure during pregnancy.",
           },
         }));
-        await loadData();
+        await loadData(selectedPatientId);
       } else if (!res.ok) {
         setError(body.detail || `Unexpected response (HTTP ${res.status})`);
       }
@@ -260,11 +302,17 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setTrace([]);
     setError(null);
     try {
-      const res = await fetch("/api/demo/reset", { method: "POST" });
+      const res = await fetch(
+        `/api/demo/reset?patient_id=${encodeURIComponent(selectedPatientId)}`,
+        { method: "POST" }
+      );
       if (res.ok) {
         const data = await res.json();
         setObligations(data.obligations ?? []);
         setAuditEvents(data.audit_events ?? []);
+        if (Array.isArray(data.patients) && data.patients.length > 0) {
+          setPatients(data.patients);
+        }
       }
     } finally {
       setLoading(false);
@@ -274,7 +322,26 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const parsedStream = parseStreamedSections(streamingRawText);
   const displaySummary = agentSummary ?? (isStreaming ? parsedStream.summary : null);
   const displayHandoff = specialistHandoff ?? (isStreaming ? parsedStream.handoff : null);
-  const patient = obligations[0];
+  const selectedPatientMeta = patients.find((p) => p.patient_id === selectedPatientId);
+  const patient: Obligation | undefined = obligations[0] ?? (selectedPatientMeta
+    ? {
+        id: "",
+        patient_id: selectedPatientMeta.patient_id,
+        patient_name: selectedPatientMeta.patient_name,
+        life_stage: selectedPatientMeta.life_stage,
+        title: "",
+        rationale: "",
+        evidence_source: "",
+        rule_version: "",
+        owner: "",
+        status: "OPEN",
+        priority: "MEDIUM",
+        verified_by: null,
+        closure_evidence: null,
+      }
+    : undefined);
+  const activePatientName =
+    patient?.patient_name ?? selectedPatientMeta?.patient_name ?? "Amina Al-Mansoori (Synthetic)";
   const isPostpartum = obligations.some((o) => o.life_stage === "Postpartum");
   const isAntenatal =
     !isPostpartum && obligations.some((o) => o.life_stage.startsWith("Antenatal"));
@@ -293,6 +360,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         totalClinicalDocCount={totalClinicalDocCount}
         onBackToTutorial={onBackToTutorial}
         onOpenClinicalDocuments={() => openClinicalDocuments()}
+      />
+
+      <PatientCohortBar
+        patients={patients}
+        selectedPatientId={selectedPatientId}
+        loading={loading || isStreaming}
+        onSelectPatient={handleSelectPatient}
       />
 
       <main className="mx-auto max-w-5xl space-y-6 px-6 py-8">
@@ -371,7 +445,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           onClose={() => setVerifyTarget(null)}
           onVerified={async (clinicianUsed) => {
             setClinicianName(clinicianUsed);
-            await loadData();
+            await loadData(selectedPatientId);
           }}
           onAuditUpdated={setAuditEvents}
           onError={setError}
@@ -380,10 +454,15 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
       <ObligationIntakeModal
         isOpen={showIntakeModal}
+        patientId={selectedPatientId}
+        patientName={activePatientName}
         onClose={() => setShowIntakeModal(false)}
-        onImported={(nextObligations, nextAuditEvents) => {
+        onImported={(nextObligations, nextAuditEvents, nextPatients) => {
           setObligations(nextObligations);
           setAuditEvents(nextAuditEvents);
+          if (Array.isArray(nextPatients) && nextPatients.length > 0) {
+            setPatients(nextPatients);
+          }
         }}
         onError={setError}
       />
@@ -420,6 +499,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         initialDocId={docsInitialId}
         currentLifeStage={currentLifeStage}
         obligations={obligations}
+        patientId={selectedPatientId}
         clinicianLabel={clinicianName}
       />
     </div>

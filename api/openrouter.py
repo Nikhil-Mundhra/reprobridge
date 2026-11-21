@@ -51,8 +51,45 @@ STREAM_SYSTEM_PROMPT = (
 
 
 def _deterministic_fallback(payload: dict[str, Any], reason: str) -> dict[str, Any]:
-    count = len(payload.get("obligations", []))
+    obligations = payload.get("obligations", [])
+    count = len(obligations)
     event_type = payload.get("transition_event", "LIFE_STAGE_TRANSITION")
+    obl_ids = {str(o.get("obligation_id", "")) for o in obligations}
+
+    if not obl_ids or obl_ids & {"OBL-101", "OBL-102"}:
+        return {
+            "mode": "deterministic_fallback",
+            "provider": "local-deterministic",
+            "model": "none",
+            "fallback_reason": reason,
+            "summary": (
+                f"Reassessed {count} de-identified obligation(s) under event '{event_type}'. "
+                "Urgent antenatal thyroid follow-up escalated for OB-GYN review; contraindicated "
+                "live-vaccine obligation preserved and deferred to postpartum."
+            ),
+            "specialist_handoff": (
+                "• Review escalated thyroid obligation (OBL-101) against first-trimester TSH target (<2.5 mIU/L) "
+                "and confirm clinician-approved management plan.\n"
+                "• Confirm Rubella non-immune obligation (OBL-102) remains scheduled on the postpartum pathway."
+            ),
+        }
+
+    bullets: list[str] = []
+    for obl in obligations:
+        oid = str(obl.get("obligation_id", "OBL"))
+        cat = str(obl.get("clinical_category", "preventive_followup")).replace("_", " ")
+        status = str(obl.get("status", "OPEN"))
+        priority = str(obl.get("priority", "MEDIUM"))
+        owner = str(obl.get("owner_specialty", "OB-GYN"))
+        if status == "DEFERRED_TO_POSTPARTUM":
+            bullets.append(
+                f"• Keep {oid} ({cat}) preserved on the postpartum pathway pending pregnancy completion ({owner})."
+            )
+        else:
+            bullets.append(
+                f"• Review {priority} obligation {oid} ({cat}) with {owner} and verify qualifying evidence before closure."
+            )
+
     return {
         "mode": "deterministic_fallback",
         "provider": "local-deterministic",
@@ -60,14 +97,11 @@ def _deterministic_fallback(payload: dict[str, Any], reason: str) -> dict[str, A
         "fallback_reason": reason,
         "summary": (
             f"Reassessed {count} de-identified obligation(s) under event '{event_type}'. "
-            "Urgent antenatal thyroid follow-up escalated for OB-GYN review; contraindicated "
-            "live-vaccine obligation preserved and deferred to postpartum."
+            "Time-sensitive antenatal care gaps escalated for specialist review; pregnancy-deferred "
+            "immunizations preserved for postpartum closure."
         ),
-        "specialist_handoff": (
-            "• Review escalated thyroid obligation (OBL-101) against first-trimester TSH target (<2.5 mIU/L) "
-            "and confirm clinician-approved management plan.\n"
-            "• Confirm Rubella non-immune obligation (OBL-102) remains scheduled on the postpartum pathway."
-        ),
+        "specialist_handoff": "\n".join(bullets)
+        or "• Review updated obligations on the Clinical Obligation Passport.",
     }
 
 

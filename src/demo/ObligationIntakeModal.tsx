@@ -3,17 +3,25 @@ import { Plus, Upload, X } from "lucide-react";
 import { handleSpatialKeyDown } from "../spatialNav";
 import { SAMPLE_IMPORT_CSV } from "./constants";
 import { parseDelimitedTable } from "./helpers";
-import type { AuditEvent, Obligation } from "./types";
+import type { AuditEvent, Obligation, PatientCohortSummary } from "./types";
 
 interface ObligationIntakeModalProps {
   isOpen: boolean;
+  patientId: string;
+  patientName: string;
   onClose: () => void;
-  onImported: (obligations: Obligation[], auditEvents: AuditEvent[]) => void;
+  onImported: (
+    obligations: Obligation[],
+    auditEvents: AuditEvent[],
+    patients?: PatientCohortSummary[]
+  ) => void;
   onError: (msg: string | null) => void;
 }
 
 export default function ObligationIntakeModal({
   isOpen,
+  patientId,
+  patientName,
   onClose,
   onImported,
   onError,
@@ -44,6 +52,8 @@ export default function ObligationIntakeModal({
           source_label: "Manual Clinician Intake",
           obligations: [
             {
+              patient_id: patientId,
+              patient_name: patientName,
               title: manualTitle.trim(),
               rationale: manualRationale.trim(),
               priority: manualPriority,
@@ -61,7 +71,7 @@ export default function ObligationIntakeModal({
         throw new Error(errBody.detail || `Import failed (HTTP ${res.status})`);
       }
       const data = await res.json();
-      onImported(data.obligations ?? [], data.audit_events ?? []);
+      onImported(data.obligations ?? [], data.audit_events ?? [], data.patients);
       setManualTitle("");
       setManualRationale("");
       setManualIncomingResult("");
@@ -88,7 +98,11 @@ export default function ObligationIntakeModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           source_label: "CSV / Table Import",
-          obligations: parsed,
+          obligations: parsed.map((row) => ({
+            ...row,
+            patient_id: patientId,
+            patient_name: patientName,
+          })),
         }),
       });
       if (!res.ok) {
@@ -96,7 +110,7 @@ export default function ObligationIntakeModal({
         throw new Error(errBody.detail || `Table import failed (HTTP ${res.status})`);
       }
       const data = await res.json();
-      onImported(data.obligations ?? [], data.audit_events ?? []);
+      onImported(data.obligations ?? [], data.audit_events ?? [], data.patients);
       onClose();
     } catch (err) {
       onError(err instanceof Error ? err.message : "Table import failed");

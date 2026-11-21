@@ -37,6 +37,7 @@ interface ClinicalDocumentsDrawerProps {
   initialDocId?: string | null;
   currentLifeStage: string;
   obligations: DrawerObligationSummary[];
+  patientId?: string;
   clinicianLabel?: string;
 }
 
@@ -546,6 +547,532 @@ const BASE_CLINICAL_DOCUMENTS: ClinicalDocument[] = [
   },
 ];
 
+const FATIMA_CLINICAL_DOCUMENTS: ClinicalDocument[] = [
+  {
+    id: "DOC-FAT-01",
+    linkedObligationId: "OBL-201",
+    category: "lab",
+    stageTag: "Preconception",
+    dayTag: "Day 0",
+    shortTitle: "Preconception Metabolic Panel (HbA1c 6.1%)",
+    documentTitle: "PRECONCEPTION METABOLIC & GLYCEMIC RISK LABORATORY REPORT",
+    facilityName: "AL BATEEN PRIMARY CLINIC DIAGNOSTICS",
+    facilitySubline: "Abu Dhabi, UAE · ISO 15189 / CAP Synthetic Lab Layout",
+    emrSystem: "Epic Beaker · Malaffi HIE",
+    licenseCode: "DoH-SYN-ALB02",
+    accessionId: "ACC-2026-0918-5180",
+    encounterId: "ENC-ALB-2026-2219",
+    fhirReference: "Observation/obs-hba1c-2026-09",
+    collectedAt: "18-Sep-2026 07:45 +04:00",
+    receivedAt: "18-Sep-2026 08:10 +04:00",
+    reportedAt: "18-Sep-2026 08:45 +04:00",
+    specimenType: "Whole Blood (EDTA) + Fasting Fluoride Oxalate",
+    orderingPhysician: "Dr. Ahmed Al-Mazrouei, MD (Family Medicine)",
+    performingPhysician: "Dr. Hessa Al-Dhaheri, FRCPath (Clinical Pathology)",
+    reportStatus: "FINAL",
+    analytes: [
+      {
+        testName: "Hemoglobin A1c (NGSP)",
+        loinc: "4548-4",
+        value: "6.1",
+        unit: "%",
+        flag: "HIGH",
+        referenceRange: "Normal < 5.7 | Prediabetes 5.7 – 6.4",
+        method: "HPLC",
+        highlight: true,
+      },
+      {
+        testName: "Fasting Plasma Glucose",
+        loinc: "1558-6",
+        value: "112",
+        unit: "mg/dL",
+        flag: "HIGH",
+        referenceRange: "70 – 99 mg/dL",
+        method: "Hexokinase",
+        highlight: true,
+      },
+      {
+        testName: "Serum Creatinine",
+        loinc: "2160-0",
+        value: "0.68",
+        unit: "mg/dL",
+        flag: "NORMAL",
+        referenceRange: "0.50 – 1.00",
+        method: "Enzymatic",
+      },
+    ],
+    clinicalNotes: [
+      "INTERPRETATION: Preconception impaired fasting glucose (112 mg/dL) and elevated HbA1c (6.1%) indicating high risk for early gestational diabetes.",
+      "CARE CONTINUITY NOTE: Escalate immediately for early 75g OGTT and medical nutrition therapy upon pregnancy confirmation (Rule RB-METABOLIC-v1.2.0).",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Hessa Al-Dhaheri, MD, FRCPath",
+      credentials: "Consultant Clinical Pathologist · Synthetic Laboratory Director",
+      signedAt: "18-Sep-2026 08:45 +04:00",
+      registryNote: "Electronically verified & published to Abu Dhabi Malaffi HIE (Synthetic Feed)",
+    },
+    searchTokens: "hba1c 6.1 fasting glucose 112 dysglycemia ogtt al bateen obl-201 4548-4",
+  },
+  {
+    id: "DOC-FAT-02",
+    linkedObligationId: "OBL-202",
+    category: "serology",
+    stageTag: "Preconception",
+    dayTag: "Day 0",
+    shortTitle: "Preconception Serology (VZV Non-Immune)",
+    documentTitle: "PRENATAL IMMUNITY & VARICELLA SEROLOGY REPORT",
+    facilityName: "AL BATEEN PRIMARY CLINIC DIAGNOSTICS",
+    facilitySubline: "Reference Immunology Unit · Abu Dhabi, UAE",
+    emrSystem: "Epic Beaker · Malaffi HIE",
+    licenseCode: "DoH-SYN-ALB02",
+    accessionId: "ACC-2026-0827-5182",
+    encounterId: "ENC-ALB-2026-1904",
+    fhirReference: "DiagnosticReport/rep-vzv-2026-08",
+    collectedAt: "27-Aug-2026 09:30 +04:00",
+    receivedAt: "27-Aug-2026 09:55 +04:00",
+    reportedAt: "27-Aug-2026 10:20 +04:00",
+    specimenType: "Serum (SST Gold Top)",
+    orderingPhysician: "Dr. Ahmed Al-Mazrouei, MD (Family Medicine)",
+    performingPhysician: "Dr. Khalid Al-Mazrouei, MD (Medical Microbiology)",
+    reportStatus: "FINAL",
+    analytes: [
+      {
+        testName: "Varicella-Zoster Virus (VZV) IgG",
+        loinc: "15410-4",
+        value: "82",
+        unit: "mIU/mL",
+        flag: "NON-IMMUNE",
+        referenceRange: "< 100 Non-Immune | ≥ 150 Protective",
+        method: "CLIA",
+        highlight: true,
+      },
+      {
+        testName: "Rubella Virus IgG Antibody",
+        loinc: "25514-1",
+        value: "48.2",
+        unit: "IU/mL",
+        flag: "NORMAL",
+        referenceRange: "≥ 10.0 Immune",
+        method: "CMIA",
+      },
+    ],
+    clinicalNotes: [
+      "INTERPRETATION: VZV IgG non-immune (82 mIU/mL). Live-attenuated Varicella vaccine is contraindicated during pregnancy; defer strictly to postpartum discharge if conception occurs first (Rule RB-IMMUNE-v1.2.1).",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Khalid Al-Mazrouei, MD",
+      credentials: "Consultant Microbiologist · Reference Virology Lab (Synthetic)",
+      signedAt: "27-Aug-2026 10:20 +04:00",
+      registryNote: "Transmitted via HL7 FHIR R4 DiagnosticReport to Malaffi HIE",
+    },
+    searchTokens: "varicella vzv igg non-immune 15410-4 serology al bateen obl-202",
+  },
+  {
+    id: "DOC-FAT-03",
+    linkedObligationId: "OBL-201",
+    category: "ob_note",
+    stageTag: "Antenatal",
+    dayTag: "Day 98",
+    shortTitle: "Antenatal Intake & Early Metabolic Escalation",
+    documentTitle: "OBSTETRIC INTAKE & EARLY PREGNANCY CONFIRMATION SUMMARY",
+    facilityName: "CORNICHE OB-GYN SPECIALIST CLINIC",
+    facilitySubline: "Maternal-Fetal Medicine & Antenatal Care · Abu Dhabi, UAE",
+    emrSystem: "Oracle Health (Cerner) · Malaffi HIE",
+    licenseCode: "DoH-SYN-CRN108",
+    accessionId: "US-CORN-2027-0109-51",
+    encounterId: "ENC-CORN-2027-0109",
+    fhirReference: "Condition/cond-pregnancy-fatima-2027",
+    collectedAt: "09-Jan-2027 11:00 +04:00",
+    receivedAt: "09-Jan-2027 11:15 +04:00",
+    reportedAt: "09-Jan-2027 11:40 +04:00",
+    specimenType: "Transvaginal Ultrasound + Serum β-hCG",
+    orderingPhysician: "Dr. Noura Al-Ketbi, MD (Maternal Endocrinology / OB)",
+    performingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG (OB-GYN)",
+    reportStatus: "VERIFIED",
+    transferBanner:
+      "CROSS-PROVIDER CONTINUITY: Registered at Corniche OB-GYN (Oracle Health) 98 days after preconception panel at Al Bateen Primary Clinic (Epic). Dysglycemia OBL-201 escalated; VZV OBL-202 deferred.",
+    analytes: [
+      {
+        testName: "Crown-Rump Length (CRL)",
+        loinc: "11957-8",
+        value: "16.4",
+        unit: "mm",
+        flag: "POSITIVE",
+        referenceRange: "8w 0d Gestation · Viable IUP",
+        method: "Transvaginal US",
+        highlight: true,
+      },
+    ],
+    clinicalNotes: [
+      "CARE-GAP RECONCILIATION: Preconception HbA1c 6.1% escalated for urgent early 75g OGTT; live VZV vaccine deferred to postpartum.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Layla Al-Hashimi, MD, FACOG",
+      credentials: "Consultant Obstetrician & Gynecologist · Corniche OB-GYN (Synthetic)",
+      signedAt: "09-Jan-2027 11:40 +04:00",
+      registryNote: "Triggers deterministic event FHIR_PREGNANCY_CONFIRMED",
+    },
+    searchTokens: "corniche antenatal ultrasound crl 8w0d fatima obl-201 handoff",
+  },
+  {
+    id: "DOC-FAT-04",
+    linkedObligationId: "OBL-201",
+    category: "lab",
+    stageTag: "Antenatal",
+    dayTag: "Day 105",
+    shortTitle: "Antenatal 75g OGTT & Nutrition Care Plan",
+    documentTitle: "ANTENATAL 75G ORAL GLUCOSE TOLERANCE TEST REPORT",
+    facilityName: "CORNICHE OB-GYN · ENDOCRINE LAB",
+    facilitySubline: "Malaffi HIE Connected Reference Lab · Abu Dhabi, UAE",
+    emrSystem: "Oracle Health · Malaffi HIE",
+    licenseCode: "DoH-SYN-CRN108",
+    accessionId: "MAL-LAB-2026-91204",
+    encounterId: "ENC-CORN-2027-0116",
+    fhirReference: "Observation/EVD-OGTT-2026-10",
+    collectedAt: "16-Jan-2027 08:00 +04:00",
+    receivedAt: "16-Jan-2027 10:10 +04:00",
+    reportedAt: "16-Jan-2027 11:05 +04:00",
+    specimenType: "Plasma (Fasting, 1h, 2h 75g Glucose Load)",
+    orderingPhysician: "Dr. Noura Al-Ketbi, MD (Maternal Endocrinology)",
+    performingPhysician: "Dr. Hessa Al-Dhaheri, FRCPath",
+    reportStatus: "VERIFIED",
+    analytes: [
+      {
+        testName: "OGTT Fasting / 1h / 2h Glucose",
+        loinc: "14749-6",
+        value: "89 / 164 / 138",
+        unit: "mg/dL",
+        flag: "NORMALIZED",
+        referenceRange: "IADPSG Targets < 92 / < 180 / < 153 mg/dL",
+        method: "Hexokinase",
+        highlight: true,
+      },
+    ],
+    clinicalNotes: [
+      "QUALIFYING CLOSURE EVIDENCE (OBL-201): Early antenatal 75g OGTT within targets; structured medical nutrition therapy & SMBG initiated.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Noura Al-Ketbi, MD",
+      credentials: "Maternal Endocrinology · Linked to Evidence ID EVD-OGTT-2026-10",
+      signedAt: "16-Jan-2027 11:05 +04:00",
+      registryNote: "Qualifying evidence available in Neon Postgres for Clinician Verify & Close",
+    },
+    searchTokens: "75g ogtt 89 164 138 iadpsg corniche mal-lab-2026-91204 evd-ogtt obl-201",
+  },
+  {
+    id: "DOC-FAT-05",
+    linkedObligationId: "OBL-202",
+    category: "immunization",
+    stageTag: "Postpartum",
+    dayTag: "Day 372",
+    shortTitle: "Postpartum Discharge & Varicella Immunization",
+    documentTitle: "POSTPARTUM DISCHARGE & VARICELLA IMMUNIZATION RECORD",
+    facilityName: "CORNICHE MATERNITY WARD",
+    facilitySubline: "Postpartum Inpatient Unit · Malaffi Immunization Registry Feed",
+    emrSystem: "Inpatient EHR · Malaffi Registry",
+    licenseCode: "DoH-SYN-MAT372",
+    accessionId: "MAL-IMM-2026-60418",
+    encounterId: "ENC-ADM-2027-0820",
+    fhirReference: "Immunization/EVD-VZV-2026-11",
+    collectedAt: "20-Aug-2027 10:15 +04:00",
+    receivedAt: "20-Aug-2027 10:16 +04:00",
+    reportedAt: "20-Aug-2027 10:30 +04:00",
+    specimenType: "Subcutaneous Immunization · Pre-Discharge",
+    orderingPhysician: "Dr. Mariam Al-Suwaidi, MD (Postpartum OB-GYN)",
+    performingPhysician: "RN Fatima Al-Kaabi, BSN",
+    reportStatus: "VERIFIED",
+    analytes: [
+      {
+        testName: "Varicella Virus Live Vaccine (Dose 1)",
+        loinc: "CVX 21",
+        value: "0.5 mL SC",
+        unit: "Right Deltoid",
+        flag: "ADMINISTERED",
+        referenceRange: "Lot #VZV-2026-AE · Dose 2 in 4–8w",
+        method: "Subcutaneous Injection",
+        highlight: true,
+      },
+    ],
+    clinicalNotes: [
+      "QUALIFYING CLOSURE EVIDENCE (OBL-202): Postpartum Varicella Dose 1 administered prior to discharge (#MAL-IMM-2026-60418).",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Mariam Al-Suwaidi, MD",
+      credentials: "Postpartum OB-GYN · Linked to Evidence ID EVD-VZV-2026-11",
+      signedAt: "20-Aug-2027 10:30 +04:00",
+      registryNote: "Recorded in Malaffi Immunization Registry (Synthetic Demonstration Record)",
+    },
+    searchTokens: "postpartum varicella vzv cvx 21 mal-imm-2026-60418 evd-vzv obl-202",
+  },
+];
+
+const SARA_CLINICAL_DOCUMENTS: ClinicalDocument[] = [
+  {
+    id: "DOC-SAR-01",
+    linkedObligationId: "OBL-301",
+    category: "ob_note",
+    stageTag: "Preconception",
+    dayTag: "Day 0",
+    shortTitle: "Preconception BP & Preeclampsia Risk Intake",
+    documentTitle: "PRECONCEPTION HYPERTENSION & OBSTETRIC RISK ASSESSMENT",
+    facilityName: "KHALIFA CITY FAMILY MEDICINE CLINIC",
+    facilitySubline: "Abu Dhabi, UAE · Ambulatory Care Continuity Feed",
+    emrSystem: "Epic Ambulatory · Malaffi HIE",
+    licenseCode: "DoH-SYN-KCF03",
+    accessionId: "ACC-2026-0921-6304",
+    encounterId: "ENC-KCF-2026-3102",
+    fhirReference: "Observation/obs-bp-2026-09",
+    collectedAt: "21-Sep-2026 10:45 +04:00",
+    receivedAt: "21-Sep-2026 10:55 +04:00",
+    reportedAt: "21-Sep-2026 11:10 +04:00",
+    specimenType: "Automated Oscillometric BP (Seated · Mean of 2)",
+    orderingPhysician: "Dr. Omar Al-Mansoori, MD (Family Medicine)",
+    performingPhysician: "Dr. Omar Al-Mansoori, MD",
+    reportStatus: "FINAL",
+    analytes: [
+      {
+        testName: "Systolic / Diastolic Blood Pressure",
+        loinc: "85354-9",
+        value: "138 / 88",
+        unit: "mmHg",
+        flag: "HIGH",
+        referenceRange: "< 120 / 80 mmHg · Prior Preterm Preeclampsia",
+        method: "Seated Oscillometric",
+        highlight: true,
+      },
+      {
+        testName: "Urine Albumin-to-Creatinine Ratio",
+        loinc: "14959-1",
+        value: "14",
+        unit: "mg/g",
+        flag: "NORMAL",
+        referenceRange: "< 30 mg/g",
+        method: "Immunoturbidimetric",
+      },
+    ],
+    clinicalNotes: [
+      "TIME-SENSITIVE PREVENTION WINDOW: Elevated preconception BP (138/88 mmHg) + prior preeclampsia history requires low-dose aspirin (150 mg nightly) starting between 12 and 16 weeks gestation (Rule RB-PREECLAMPSIA-v1.3.0).",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Omar Al-Mansoori, MD",
+      credentials: "Family Medicine · Khalifa City Clinic (Synthetic)",
+      signedAt: "21-Sep-2026 11:10 +04:00",
+      registryNote: "Published via HL7 FHIR R4 Observation to Malaffi HIE",
+    },
+    searchTokens: "preeclampsia aspirin blood pressure 138/88 khalifa city obl-301 85354-9",
+  },
+  {
+    id: "DOC-SAR-02",
+    linkedObligationId: "OBL-302",
+    category: "immunization",
+    stageTag: "Preconception",
+    dayTag: "Day 0",
+    shortTitle: "Preconception Immunization Gap (HPV Dose 2/3)",
+    documentTitle: "ADULT PREVENTIVE IMMUNIZATION FORECAST REPORT",
+    facilityName: "KHALIFA CITY FAMILY MEDICINE CLINIC",
+    facilitySubline: "Malaffi Immunization Registry Sync · Abu Dhabi, UAE",
+    emrSystem: "Epic · Malaffi Registry",
+    licenseCode: "DoH-SYN-KCF03",
+    accessionId: "ACC-2026-0829-6305",
+    encounterId: "ENC-KCF-2026-2884",
+    fhirReference: "ImmunizationRecommendation/rec-hpv-2026-08",
+    collectedAt: "29-Aug-2026 08:40 +04:00",
+    receivedAt: "29-Aug-2026 08:50 +04:00",
+    reportedAt: "29-Aug-2026 09:00 +04:00",
+    specimenType: "Registry Immunization Forecast",
+    orderingPhysician: "Dr. Omar Al-Mansoori, MD",
+    performingPhysician: "RN Salma Al-Dhaheri, BSN",
+    reportStatus: "FINAL",
+    analytes: [
+      {
+        testName: "HPV 9-Valent Series Status",
+        loinc: "CVX 165",
+        value: "1 of 3 Doses Complete",
+        unit: "Dose 2 Overdue",
+        flag: "NON-IMMUNE",
+        referenceRange: "Defer during pregnancy; complete postpartum",
+        method: "Registry Audit",
+        highlight: true,
+      },
+    ],
+    clinicalNotes: [
+      "CLINICAL GUIDANCE: HPV vaccination is not recommended during pregnancy; preserve incomplete Dose 2/3 obligation across antenatal care and reactivate postpartum (Rule RB-HPV-v1.1.0).",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Omar Al-Mansoori, MD",
+      credentials: "Family Medicine · Malaffi Immunization Sync",
+      signedAt: "29-Aug-2026 09:00 +04:00",
+      registryNote: "Synchronized to ReproBridge Obligation Passport",
+    },
+    searchTokens: "hpv 9-valent cvx 165 dose 2 incomplete khalifa city obl-302",
+  },
+  {
+    id: "DOC-SAR-03",
+    linkedObligationId: "OBL-301",
+    category: "ob_note",
+    stageTag: "Antenatal",
+    dayTag: "Day 112",
+    shortTitle: "Antenatal Dating Scan & 12w Aspirin Window",
+    documentTitle: "FIRST-TRIMESTER MATERNAL-FETAL MEDICINE CONSULTATION",
+    facilityName: "DANAT AL EMARAT MATERNITY HOSPITAL",
+    facilitySubline: "MFM & High-Risk Obstetrics · Abu Dhabi, UAE",
+    emrSystem: "Oracle Health · Malaffi HIE",
+    licenseCode: "DoH-SYN-DAE09",
+    accessionId: "US-DAE-2027-0122-63",
+    encounterId: "ENC-DAE-2027-0122",
+    fhirReference: "Condition/cond-pregnancy-sara-2027",
+    collectedAt: "22-Jan-2027 09:15 +04:00",
+    receivedAt: "22-Jan-2027 09:30 +04:00",
+    reportedAt: "22-Jan-2027 10:00 +04:00",
+    specimenType: "First-Trimester Ultrasound + BP Check",
+    orderingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG (MFM / OB-GYN)",
+    performingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG",
+    reportStatus: "VERIFIED",
+    transferBanner:
+      "CROSS-PROVIDER CONTINUITY: Registered at Danat Al Emarat (Oracle Health) 112 days after Khalifa City Family Medicine intake (Epic). 12–16w low-dose aspirin window flagged URGENT; HPV Dose 2 deferred.",
+    analytes: [
+      {
+        testName: "Crown-Rump Length (CRL)",
+        loinc: "11957-8",
+        value: "56.0",
+        unit: "mm",
+        flag: "POSITIVE",
+        referenceRange: "12w 1d Gestation · Aspirin Window Open",
+        method: "Transabdominal US",
+        highlight: true,
+      },
+    ],
+    clinicalNotes: [
+      "CARE-GAP RECONCILIATION: Patient enters 12–16w preeclampsia prophylaxis window today; low-dose aspirin 150 mg nightly ordered.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Layla Al-Hashimi, MD, FACOG",
+      credentials: "MFM / OB-GYN · Danat Al Emarat (Synthetic)",
+      signedAt: "22-Jan-2027 10:00 +04:00",
+      registryNote: "Triggers deterministic event FHIR_PREGNANCY_CONFIRMED",
+    },
+    searchTokens: "danat al emarat mfm 12w1d aspirin window sara obl-301 handoff",
+  },
+  {
+    id: "DOC-SAR-04",
+    linkedObligationId: "OBL-301",
+    category: "lab",
+    stageTag: "Antenatal",
+    dayTag: "Day 115",
+    shortTitle: "Aspirin 150 mg Prophylaxis & BP Stabilization",
+    documentTitle: "ANTENATAL PREECLAMPSIA PROPHYLAXIS VERIFICATION",
+    facilityName: "DANAT AL EMARAT MATERNITY HOSPITAL",
+    facilitySubline: "MFM Hypertension Clinic · Abu Dhabi, UAE",
+    emrSystem: "Oracle Health · Malaffi e-Rx",
+    licenseCode: "DoH-SYN-DAE09",
+    accessionId: "MAL-RX-2026-77310",
+    encounterId: "ENC-DAE-2027-0125",
+    fhirReference: "MedicationRequest/EVD-ASA-2026-10",
+    collectedAt: "25-Jan-2027 09:00 +04:00",
+    receivedAt: "25-Jan-2027 09:10 +04:00",
+    reportedAt: "25-Jan-2027 09:20 +04:00",
+    specimenType: "Clinic BP + Pharmacy Dispense Verification",
+    orderingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG (MFM / OB-GYN)",
+    performingPhysician: "Dr. Layla Al-Hashimi, MD, FACOG",
+    reportStatus: "VERIFIED",
+    analytes: [
+      {
+        testName: "Repeat Antenatal Blood Pressure",
+        loinc: "85354-9",
+        value: "124 / 78",
+        unit: "mmHg",
+        flag: "NORMALIZED",
+        referenceRange: "Target < 135 / 85 mmHg",
+        method: "Seated Oscillometric",
+        priorDelta: "Prior 138/88",
+        highlight: true,
+      },
+    ],
+    rxOrder: {
+      medication: "Aspirin 150 mg Enteric-Coated Oral Tablet",
+      sig: "Take 1 tablet by mouth nightly at bedtime through 36 weeks gestation.",
+      prescriber: "Dr. Layla Al-Hashimi, MD, FACOG",
+      dispenseStatus: "Active & Dispensed · Malaffi e-Rx #MAL-RX-2026-77310",
+    },
+    clinicalNotes: [
+      "QUALIFYING CLOSURE EVIDENCE (OBL-301): Aspirin 150 mg prophylaxis initiated at 12w4d within the 12–16w prophylaxis window; BP improved to 124/78 mmHg.",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Layla Al-Hashimi, MD, FACOG",
+      credentials: "MFM / OB-GYN · Linked to Evidence ID EVD-ASA-2026-10",
+      signedAt: "25-Jan-2027 09:20 +04:00",
+      registryNote: "Qualifying evidence available in Neon Postgres for Clinician Verify & Close",
+    },
+    searchTokens: "aspirin 150 mg preeclampsia 124/78 mal-rx-2026-77310 evd-asa obl-301",
+  },
+  {
+    id: "DOC-SAR-05",
+    linkedObligationId: "OBL-302",
+    category: "immunization",
+    stageTag: "Postpartum",
+    dayTag: "Day 386",
+    shortTitle: "Postpartum HPV 9-Valent Dose 2 Record",
+    documentTitle: "POSTPARTUM DISCHARGE & HPV SERIES CONTINUATION RECORD",
+    facilityName: "DANAT AL EMARAT POSTPARTUM CLINIC",
+    facilitySubline: "Postpartum Unit · Malaffi Immunization Registry Feed",
+    emrSystem: "Inpatient EHR · Malaffi Registry",
+    licenseCode: "DoH-SYN-DAE09",
+    accessionId: "MAL-IMM-2026-71892",
+    encounterId: "ENC-DAE-2027-0902",
+    fhirReference: "Immunization/EVD-HPV-2026-11",
+    collectedAt: "02-Sep-2027 11:05 +04:00",
+    receivedAt: "02-Sep-2027 11:06 +04:00",
+    reportedAt: "02-Sep-2027 11:15 +04:00",
+    specimenType: "Intramuscular Immunization · Pre-Discharge",
+    orderingPhysician: "Dr. Mariam Al-Suwaidi, MD (Postpartum OB-GYN)",
+    performingPhysician: "RN Salma Al-Dhaheri, BSN",
+    reportStatus: "VERIFIED",
+    analytes: [
+      {
+        testName: "HPV 9-Valent Recombinant Vaccine (Dose 2/3)",
+        loinc: "CVX 165",
+        value: "0.5 mL IM",
+        unit: "Left Deltoid",
+        flag: "ADMINISTERED",
+        referenceRange: "Lot #HPV-2026-AE · Dose 3 in 4 mo",
+        method: "Intramuscular Injection",
+        highlight: true,
+      },
+    ],
+    clinicalNotes: [
+      "QUALIFYING CLOSURE EVIDENCE (OBL-302): Postpartum HPV 9-valent Dose 2 administered prior to discharge (#MAL-IMM-2026-71892).",
+    ],
+    signatureBlock: {
+      signedBy: "Dr. Mariam Al-Suwaidi, MD",
+      credentials: "Postpartum OB-GYN · Linked to Evidence ID EVD-HPV-2026-11",
+      signedAt: "02-Sep-2027 11:15 +04:00",
+      registryNote: "Recorded in Malaffi Immunization Registry (Synthetic Demonstration Record)",
+    },
+    searchTokens: "postpartum hpv cvx 165 dose 2 mal-imm-2026-71892 evd-hpv obl-302",
+  },
+];
+
+const PATIENT_DOC_PACKS: Record<string, ClinicalDocument[]> = {
+  "PAT-AE-4092": BASE_CLINICAL_DOCUMENTS,
+  "PAT-AE-5180": FATIMA_CLINICAL_DOCUMENTS,
+  "PAT-AE-6304": SARA_CLINICAL_DOCUMENTS,
+};
+
+const PATIENT_DEMOGRAPHICS: Record<string, { dobSex: string; emiratesId: string }> = {
+  "PAT-AE-4092": { dobSex: "14-Mar-1994 (32Y · F)", emiratesId: "784-1994-0004092-7 (SYN)" },
+  "PAT-AE-5180": { dobSex: "08-Nov-1997 (29Y · F)", emiratesId: "784-1997-0005180-3 (SYN)" },
+  "PAT-AE-6304": { dobSex: "21-Jun-1990 (36Y · F)", emiratesId: "784-1990-0006304-9 (SYN)" },
+};
+
+const SEEDED_DOC_OBLIGATION_IDS = new Set([
+  "OBL-101",
+  "OBL-102",
+  "OBL-201",
+  "OBL-202",
+  "OBL-301",
+  "OBL-302",
+]);
+
 function getStageRank(stage: string): number {
   const lowered = stage.toLowerCase();
   if (lowered.includes("postpartum")) return 2;
@@ -592,6 +1119,10 @@ function CategoryIcon({ category }: { category: DocCategory }) {
 export function getDefaultDocIdForObligation(obligationId: string): string {
   if (obligationId === "OBL-101") return "DOC-LAB-01";
   if (obligationId === "OBL-102") return "DOC-SER-02";
+  if (obligationId === "OBL-201") return "DOC-FAT-01";
+  if (obligationId === "OBL-202") return "DOC-FAT-02";
+  if (obligationId === "OBL-301") return "DOC-SAR-01";
+  if (obligationId === "OBL-302") return "DOC-SAR-02";
   return `DOC-IMP-${obligationId}`;
 }
 
@@ -601,20 +1132,33 @@ export default function ClinicalDocumentsDrawer({
   initialDocId,
   currentLifeStage,
   obligations,
+  patientId: propPatientId,
   clinicianLabel = "Dr. Layla Al-Hashimi, MD (OB-GYN)",
 }: ClinicalDocumentsDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = useId();
   const tableCaptionId = useId();
 
+  const activePatientId = propPatientId ?? obligations[0]?.patient_id ?? "PAT-AE-4092";
+  const patientPack = PATIENT_DOC_PACKS[activePatientId] ?? BASE_CLINICAL_DOCUMENTS;
+
   const [searchQuery, setSearchQuery] = useState("");
   const [stageFilter, setStageFilter] = useState<"ALL" | "Preconception" | "Antenatal" | "Postpartum">("ALL");
-  const [selectedDocId, setSelectedDocId] = useState<string>("DOC-LAB-01");
+  const [selectedDocId, setSelectedDocId] = useState<string>(patientPack[0]?.id ?? "DOC-LAB-01");
+
+  // Reset selected doc when switching active patient unless initialDocId was targeted
+  useEffect(() => {
+    if (!initialDocId && patientPack[0]) {
+      setSelectedDocId(patientPack[0].id);
+      setStageFilter("ALL");
+      setSearchQuery("");
+    }
+  }, [activePatientId, initialDocId, patientPack]);
 
   // Dynamically include synthetic clinical reference sheets for any newly imported obligations
   const documents = useMemo<ClinicalDocument[]>(() => {
     const importedDocs: ClinicalDocument[] = obligations
-      .filter((o) => o.id !== "OBL-101" && o.id !== "OBL-102")
+      .filter((o) => !SEEDED_DOC_OBLIGATION_IDS.has(o.id))
       .map((o) => ({
         id: `DOC-IMP-${o.id}`,
         linkedObligationId: o.id,
@@ -668,8 +1212,8 @@ export default function ClinicalDocumentsDrawer({
         searchTokens: `${o.id} ${o.title} ${o.rationale} ${o.evidence_source} ${o.owner}`.toLowerCase(),
       }));
 
-    return [...BASE_CLINICAL_DOCUMENTS, ...importedDocs];
-  }, [obligations, clinicianLabel]);
+    return [...patientPack, ...importedDocs];
+  }, [patientPack, obligations, clinicianLabel]);
 
   // Sync selected document when opened via a specific obligation link
   useEffect(() => {
@@ -768,7 +1312,11 @@ export default function ClinicalDocumentsDrawer({
 
   const currentStageRank = getStageRank(currentLifeStage);
   const patientName = obligations[0]?.patient_name ?? "Amina Al-Mansoori (Synthetic)";
-  const patientId = obligations[0]?.patient_id ?? "PAT-AE-4092";
+  const patientId = activePatientId;
+  const demographics = PATIENT_DEMOGRAPHICS[patientId] ?? {
+    dobSex: "14-Mar-1994 (32Y · F)",
+    emiratesId: "784-1994-0004092-7 (SYN)",
+  };
   const linkedObligation = activeDoc?.linkedObligationId
     ? obligations.find((o) => o.id === activeDoc.linkedObligationId) ?? null
     : null;
@@ -1024,11 +1572,11 @@ export default function ClinicalDocumentsDrawer({
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="font-semibold uppercase text-slate-500">DOB / Sex</dt>
-                        <dd className="text-slate-800">14-Mar-1994 (32Y · F)</dd>
+                        <dd className="text-slate-800">{demographics.dobSex}</dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="font-semibold uppercase text-slate-500">Emirates ID</dt>
-                        <dd className="font-mono text-slate-700">784-1994-0004092-7 (SYN)</dd>
+                        <dd className="font-mono text-slate-700">{demographics.emiratesId}</dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="font-semibold uppercase text-slate-500">Encounter / Source</dt>

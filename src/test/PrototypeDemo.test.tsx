@@ -51,6 +51,43 @@ function makeSeedObligations(): Obligation[] {
   ];
 }
 
+function makeFatimaObligations(): Obligation[] {
+  return [
+    {
+      id: "OBL-201",
+      patient_id: "PAT-AE-5180",
+      patient_name: "Fatima Al-Zaabi (Synthetic)",
+      life_stage: "Preconception",
+      title: "Preconception Dysglycemia Follow-up (Fasting Glucose 112 mg/dL · HbA1c 6.1%)",
+      rationale:
+        "Preconception panel showed impaired fasting glucose (112 mg/dL) and HbA1c 6.1%.",
+      evidence_source: "FHIR Observation/obs-hba1c-2026-09 (Malaffi HIE Synthetic)",
+      rule_version: "RB-METABOLIC-v1.2.0",
+      owner: "Primary Care / Endocrinology",
+      status: "OPEN",
+      priority: "HIGH",
+      verified_by: null,
+      closure_evidence: null,
+    },
+    {
+      id: "OBL-202",
+      patient_id: "PAT-AE-5180",
+      patient_name: "Fatima Al-Zaabi (Synthetic)",
+      life_stage: "Preconception",
+      title: "Varicella-Zoster (VZV) IgG Non-Immune Vaccination Verification",
+      rationale:
+        "Preconception serology indicated VZV IgG non-immune status (<100 mIU/mL).",
+      evidence_source: "FHIR DiagnosticReport/rep-vzv-2026-08",
+      rule_version: "RB-IMMUNE-v1.2.1",
+      owner: "Preventive Care Nurse",
+      status: "OPEN",
+      priority: "MEDIUM",
+      verified_by: null,
+      closure_evidence: null,
+    },
+  ];
+}
+
 function makePregnancyObligations(): Obligation[] {
   return [
     {
@@ -329,7 +366,7 @@ describe("spatialNav 2D keyboard navigation", () => {
 });
 
 describe("<PrototypeDemo /> component workflows", () => {
-  let obligationsState: Obligation[];
+  let obligationsByPatient: Record<string, Obligation[]>;
   let auditState: Array<{
     id: number;
     obligation_id: string | null;
@@ -340,7 +377,11 @@ describe("<PrototypeDemo /> component workflows", () => {
   }>;
 
   beforeEach(() => {
-    obligationsState = makeSeedObligations();
+    obligationsByPatient = {
+      "PAT-AE-4092": makeSeedObligations(),
+      "PAT-AE-5180": makeFatimaObligations(),
+      "PAT-AE-6304": [],
+    };
     auditState = [
       {
         id: 1,
@@ -358,13 +399,24 @@ describe("<PrototypeDemo /> component workflows", () => {
         summary: "Logged Rubella IgG non-immune obligation.",
         created_at: "2026-11-20T09:05:00Z",
       },
+      {
+        id: 3,
+        obligation_id: "OBL-201",
+        event_type: "CARE_GAP_DETECTED",
+        actor: "RuleEngine (RB-METABOLIC-v1.2.0)",
+        summary: "Logged preconception dysglycemia obligation.",
+        created_at: "2026-11-20T09:10:00Z",
+      },
     ];
 
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString();
+      const parsed = new URL(url, "http://localhost");
+      const pathname = parsed.pathname;
+      const patientId = parsed.searchParams.get("patient_id") ?? "PAT-AE-4092";
       const method = (init?.method ?? "GET").toUpperCase();
 
-      if (url === "/api/health" && method === "GET") {
+      if (pathname === "/api/health" && method === "GET") {
         return createJsonResponse({
           status: "ok",
           residency_policy: "UAE_PHI_LOCAL_ONLY",
@@ -383,18 +435,23 @@ describe("<PrototypeDemo /> component workflows", () => {
         });
       }
 
-      if (url === "/api/obligations" && method === "GET") {
+      if (pathname === "/api/obligations" && method === "GET") {
+        const obls = obligationsByPatient[patientId] ?? [];
+        const oblIds = new Set(obls.map((o) => o.id));
         return createJsonResponse({
-          obligations: obligationsState,
-          audit_events: auditState,
+          patient_id: patientId,
+          obligations: obls,
+          audit_events: auditState.filter(
+            (ev) => !ev.obligation_id || oblIds.has(ev.obligation_id)
+          ),
         });
       }
 
-      if (url === "/api/transitions/pregnancy/stream" && method === "POST") {
-        obligationsState = makePregnancyObligations();
+      if (pathname === "/api/transitions/pregnancy/stream" && method === "POST") {
+        obligationsByPatient[patientId] = makePregnancyObligations();
         auditState = [
           {
-            id: 3,
+            id: 4,
             obligation_id: "OBL-101",
             event_type: "LIFE_STAGE_TRANSITION",
             actor: "Deterministic Rule Engine",
@@ -402,7 +459,7 @@ describe("<PrototypeDemo /> component workflows", () => {
             created_at: "2026-11-20T10:00:00Z",
           },
           {
-            id: 4,
+            id: 5,
             obligation_id: null,
             event_type: "AGENT_BRIEF_GENERATED",
             actor: "AgentHarness (google/gemma-4-31b-it:free)",
@@ -454,7 +511,7 @@ describe("<PrototypeDemo /> component workflows", () => {
             event: "deterministic_complete",
             data: {
               event_type: "FHIR_PREGNANCY_CONFIRMED",
-              obligations: obligationsState,
+              obligations: obligationsByPatient[patientId],
               audit_events: auditState,
               privacy_report: privacyReport,
               trace: trace.slice(0, 3),
@@ -482,14 +539,14 @@ describe("<PrototypeDemo /> component workflows", () => {
               },
               privacy_report: privacyReport,
               trace,
-              obligations: obligationsState,
+              obligations: obligationsByPatient[patientId],
               audit_events: auditState,
             },
           },
         ]);
       }
 
-      if (url === "/api/obligations/OBL-101/evidence" && method === "GET") {
+      if (pathname === "/api/obligations/OBL-101/evidence" && method === "GET") {
         return createJsonResponse({
           obligation_id: "OBL-101",
           evidence: [
@@ -510,12 +567,12 @@ describe("<PrototypeDemo /> component workflows", () => {
         });
       }
 
-      if (url === "/api/obligations/OBL-101/verify" && method === "POST") {
+      if (pathname === "/api/obligations/OBL-101/verify" && method === "POST") {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
           clinician_name: string;
           closure_evidence: string;
         };
-        obligationsState = obligationsState.map((o) =>
+        obligationsByPatient["PAT-AE-4092"] = obligationsByPatient["PAT-AE-4092"].map((o) =>
           o.id === "OBL-101"
             ? {
                 ...o,
@@ -526,12 +583,12 @@ describe("<PrototypeDemo /> component workflows", () => {
             : o
         );
         return createJsonResponse({
-          obligation: obligationsState[0],
+          obligation: obligationsByPatient["PAT-AE-4092"][0],
           audit_events: auditState,
         });
       }
 
-      if (url === "/api/obligations/OBL-102/verify" && method === "POST") {
+      if (pathname === "/api/obligations/OBL-102/verify" && method === "POST") {
         return createJsonResponse(
           {
             detail:
@@ -541,9 +598,10 @@ describe("<PrototypeDemo /> component workflows", () => {
         );
       }
 
-      if (url === "/api/obligations/import" && method === "POST") {
+      if (pathname === "/api/obligations/import" && method === "POST") {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
           obligations: Array<{
+            patient_id?: string;
             title: string;
             rationale: string;
             priority?: string;
@@ -552,9 +610,11 @@ describe("<PrototypeDemo /> component workflows", () => {
             evidence_source?: string;
           }>;
         };
+        const targetPid = body.obligations[0]?.patient_id ?? "PAT-AE-4092";
+        const currentList = obligationsByPatient[targetPid] ?? [];
         const added = body.obligations.map((item, idx) => ({
           id: `OBL-${103 + idx}`,
-          patient_id: "PAT-AE-4092",
+          patient_id: targetPid,
           patient_name: "Amina Al-Mansoori (Synthetic)",
           life_stage: item.life_stage ?? "Preconception",
           title: item.title,
@@ -567,10 +627,10 @@ describe("<PrototypeDemo /> component workflows", () => {
           verified_by: null,
           closure_evidence: null,
         }));
-        obligationsState = [...obligationsState, ...added];
+        obligationsByPatient[targetPid] = [...currentList, ...added];
         return createJsonResponse({
           imported_count: added.length,
-          obligations: obligationsState,
+          obligations: obligationsByPatient[targetPid],
           audit_events: auditState,
         });
       }
@@ -727,5 +787,28 @@ describe("<PrototypeDemo /> component workflows", () => {
       within(docsDialog).getByText("CLINICAL CHEMISTRY & ENDOCRINOLOGY LABORATORY REPORT")
     ).toBeInTheDocument();
     expect(within(docsDialog).getByText("4.80")).toBeInTheDocument();
+  });
+
+  it("renders the 3-patient Population Cohort Switcher and switches to Fatima Al-Zaabi (PAT-AE-5180)", async () => {
+    const user = userEvent.setup();
+    render(<PrototypeDemo onBackToTutorial={vi.fn()} />);
+
+    const cohort = screen.getByRole("region", { name: /Population Cohort Switcher/i });
+    expect(within(cohort).getByText("Amina Al-Mansoori (Synthetic)")).toBeInTheDocument();
+    expect(within(cohort).getByText("Fatima Al-Zaabi (Synthetic)")).toBeInTheDocument();
+    expect(within(cohort).getByText("Sara Al-Nuaimi (Synthetic)")).toBeInTheDocument();
+
+    await user.click(within(cohort).getByRole("tab", { name: /Fatima Al-Zaabi/i }));
+
+    const main = screen.getByRole("main");
+    expect(await within(main).findByText(/Fatima Al-Zaabi \(Synthetic\)/)).toBeInTheDocument();
+    expect(within(main).getByText("PAT-AE-5180")).toBeInTheDocument();
+    expect(within(main).getByText("Al Bateen Primary Clinic")).toBeInTheDocument();
+    expect(
+      within(main).getByText("Preconception Dysglycemia Follow-up (Fasting Glucose 112 mg/dL · HbA1c 6.1%)")
+    ).toBeInTheDocument();
+    expect(
+      within(main).getByText("Varicella-Zoster (VZV) IgG Non-Immune Vaccination Verification")
+    ).toBeInTheDocument();
   });
 });

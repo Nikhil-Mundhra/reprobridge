@@ -152,3 +152,44 @@ def test_full_six_step_functional_flow(monkeypatch):
     final_reset = client.post("/api/demo/reset")
     assert final_reset.status_code == 200
     assert all(o["status"] == "OPEN" for o in final_reset.json()["obligations"])
+
+
+def test_multi_patient_cohort_and_transitions(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = TestClient(app)
+    client.post("/api/demo/reset")
+
+    cohort = client.get("/api/patients")
+    assert cohort.status_code == 200
+    patients = cohort.json()["patients"]
+    assert [p["patient_id"] for p in patients] == [
+        "PAT-AE-4092",
+        "PAT-AE-5180",
+        "PAT-AE-6304",
+    ]
+
+    fatima_initial = client.get("/api/obligations?patient_id=PAT-AE-5180")
+    assert fatima_initial.status_code == 200
+    assert {o["id"] for o in fatima_initial.json()["obligations"]} == {"OBL-201", "OBL-202"}
+
+    fatima_preg = client.post("/api/transitions/pregnancy?patient_id=PAT-AE-5180")
+    assert fatima_preg.status_code == 200
+    fp = fatima_preg.json()
+    by_id = {o["id"]: o for o in fp["obligations"]}
+    assert by_id["OBL-201"]["status"] == "ESCALATED_FOR_REVIEW"
+    assert by_id["OBL-201"]["priority"] == "URGENT"
+    assert by_id["OBL-202"]["status"] == "DEFERRED_TO_POSTPARTUM"
+    payload_str = json.dumps(fp["privacy_report"]["payload"])
+    assert "Fatima" not in payload_str
+    assert "PAT-AE-5180" not in payload_str
+
+    sara_preg = client.post("/api/transitions/pregnancy?patient_id=PAT-AE-6304")
+    assert sara_preg.status_code == 200
+    sara_by_id = {o["id"]: o for o in sara_preg.json()["obligations"]}
+    assert sara_by_id["OBL-301"]["status"] == "ESCALATED_FOR_REVIEW"
+    assert sara_by_id["OBL-301"]["priority"] == "URGENT"
+    assert sara_by_id["OBL-302"]["status"] == "DEFERRED_TO_POSTPARTUM"
+
+    client.post("/api/demo/reset")

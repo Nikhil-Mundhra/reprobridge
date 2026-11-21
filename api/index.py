@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from api.db import (
+    PATIENT_COHORT_META,
     append_audit_event,
     check_database_health,
     create_evidence_record,
@@ -16,6 +17,7 @@ from api.db import (
     list_audit_events,
     list_evidence_for_obligation,
     list_obligations,
+    list_patient_summaries,
     reset_obligations,
     update_obligation,
 )
@@ -51,7 +53,7 @@ class VerifyClosureRequest(BaseModel):
 class ObligationIntakeItem(BaseModel):
     id: str | None = Field(default=None, max_length=64)
     patient_id: str | None = Field(default="PAT-AE-4092", max_length=64)
-    patient_name: str | None = Field(default="Amina Al-Mansoori (Synthetic)", max_length=128)
+    patient_name: str | None = Field(default=None, max_length=128)
     life_stage: str | None = Field(default="Preconception", max_length=64)
     title: str = Field(..., min_length=3, max_length=256)
     rationale: str = Field(..., min_length=4, max_length=1500)
@@ -80,8 +82,22 @@ class EvidenceIntakeRequest(BaseModel):
     summary_note: str | None = Field(default=None, max_length=1000)
 
 
-def _run_transition(event_type: str) -> dict[str, Any]:
-    current = list_obligations()
+def _filter_audit_events(
+    obligations: list[dict[str, Any]], patient_id: str
+) -> list[dict[str, Any]]:
+    all_events = list_audit_events()
+    if patient_id == "ALL":
+        return all_events
+    obl_ids = {str(o["id"]) for o in obligations}
+    return [
+        ev
+        for ev in all_events
+        if ev.get("obligation_id") in obl_ids or ev.get("obligation_id") is None
+    ]
+
+
+def _run_transition(event_type: str, patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
+    current = list_obligations(patient_id=patient_id)
     result = transition_workflow.invoke(
         {
             "event_type": event_type,
@@ -122,15 +138,18 @@ def _run_transition(event_type: str) -> dict[str, Any]:
         },
     )
 
+    updated_obls = list_obligations(patient_id=patient_id)
     return {
+        "patient_id": patient_id,
         "event_type": event_type,
         "agent_summary": result["agent_summary"],
         "specialist_handoff": result["specialist_handoff"],
         "ai_metadata": result["ai_metadata"],
         "privacy_report": result["privacy_report"],
         "trace": result["trace"],
-        "obligations": list_obligations(),
-        "audit_events": list_audit_events(),
+        "obligations": updated_obls,
+        "audit_events": _filter_audit_events(updated_obls, patient_id),
+        "patients": list_patient_summaries(),
     }
 
 
@@ -138,9 +157,11 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
-def _stream_transition_events(event_type: str) -> Iterator[str]:
+def _stream_transition_events(
+    event_type: str, patient_id: str = "PAT-AE-4092"
+) -> Iterator[str]:
     """Run deterministic steps first (yielding immediately), then stream OpenRouter tokens."""
-    current = list_obligations()
+    current = list_obligations(patient_id=patient_id)
     state: dict[str, Any] = {
         "event_type": event_type,
         "obligations": current,
@@ -173,12 +194,15 @@ def _stream_transition_events(event_type: str) -> Iterator[str]:
                 obligation_id=obl_id,
             )
 
+    mid_obls = list_obligations(patient_id=patient_id)
     yield _sse(
         "deterministic_complete",
         {
+            "patient_id": patient_id,
             "event_type": event_type,
-            "obligations": list_obligations(),
-            "audit_events": list_audit_events(),
+            "obligations": mid_obls,
+            "audit_events": _filter_audit_events(mid_obls, patient_id),
+            "patients": list_patient_summaries(),
             "privacy_report": state["privacy_report"],
             "trace": state["trace"],
         },
@@ -235,17 +259,20 @@ def _stream_transition_events(event_type: str) -> Iterator[str]:
         },
     )
 
+    final_obls = list_obligations(patient_id=patient_id)
     yield _sse(
         "complete",
         {
+            "patient_id": patient_id,
             "event_type": event_type,
             "agent_summary": synthesis["summary"],
             "specialist_handoff": synthesis["specialist_handoff"],
             "ai_metadata": ai_metadata,
             "privacy_report": state["privacy_report"],
             "trace": final_trace,
-            "obligations": list_obligations(),
-            "audit_events": list_audit_events(),
+            "obligations": final_obls,
+            "audit_events": _filter_audit_events(final_obls, patient_id),
+            "patients": list_patient_summaries(),
         },
     )
 
@@ -265,38 +292,58 @@ def health():
     }
 
 
+@app.get("/api/patients")
+def get_patients():
+    """List synthetic patient cohort summaries with per-patient obligation counts."""
+    return {"patients": list_patient_summaries()}
+
+
 @app.get("/api/obligations")
-def get_obligations():
+def get_obligations(patient_id: str = "PAT-AE-4092"):
+    obls = list_obligations(patient_id=patient_id)
     return {
-        "obligations": list_obligations(),
-        "audit_events": list_audit_events(),
+        "patient_id": patient_id,
+        "obligations": obls,
+        "audit_events": _filter_audit_events(obls, patient_id),
+        "patients": list_patient_summaries(),
     }
 
 
-def _next_obligation_id(existing: list[dict[str, Any]]) -> str:
+def _next_obligation_id(
+    existing: list[dict[str, Any]], patient_id: str = "PAT-AE-4092"
+) -> str:
+    id_base = int(PATIENT_COHORT_META.get(patient_id, {}).get("id_base", 100))
     nums = []
     for item in existing:
         raw = str(item.get("id", ""))
         if raw.startswith("OBL-") and raw[4:].isdigit():
             nums.append(int(raw[4:]))
-    return f"OBL-{max(nums, default=100) + 1}"
+    return f"OBL-{max(nums, default=id_base) + 1}"
 
 
 @app.post("/api/obligations/import")
 def import_obligations(body: ObligationImportRequest):
     """Ingest one or more clinical obligations from manual input or CSV/TSV table import."""
-    current = list_obligations()
+    target_pid = (body.obligations[0].patient_id or "PAT-AE-4092").strip() or "PAT-AE-4092"
+    current = list_obligations(patient_id=target_pid)
     created: list[dict[str, Any]] = []
     for item in body.obligations:
-        obl_id = (item.id or "").strip() or _next_obligation_id(current + created)
+        pid = (item.patient_id or target_pid).strip() or target_pid
+        patient_name = (item.patient_name or "").strip() or str(
+            PATIENT_COHORT_META.get(pid, {}).get(
+                "patient_name", "Amina Al-Mansoori (Synthetic)"
+            )
+        )
+        same_patient_existing = [o for o in current + created if o.get("patient_id") == pid]
+        obl_id = (item.id or "").strip() or _next_obligation_id(same_patient_existing, pid)
         priority = (item.priority or "MEDIUM").strip().upper()
         if priority not in {"URGENT", "HIGH", "MEDIUM"}:
             priority = "MEDIUM"
         rec = create_obligation(
             {
                 "id": obl_id,
-                "patient_id": item.patient_id,
-                "patient_name": item.patient_name,
+                "patient_id": pid,
+                "patient_name": patient_name,
                 "life_stage": item.life_stage,
                 "title": item.title.strip(),
                 "rationale": item.rationale.strip(),
@@ -329,10 +376,13 @@ def import_obligations(body: ObligationImportRequest):
                     ),
                 }
             )
+    obls_for_pid = list_obligations(patient_id=target_pid)
     return {
+        "patient_id": target_pid,
         "imported_count": len(created),
-        "obligations": list_obligations(),
-        "audit_events": list_audit_events(),
+        "obligations": obls_for_pid,
+        "audit_events": _filter_audit_events(obls_for_pid, target_pid),
+        "patients": list_patient_summaries(),
     }
 
 
@@ -384,28 +434,28 @@ def add_obligation_evidence(obligation_id: str, body: EvidenceIntakeRequest):
 
 
 @app.post("/api/transitions/pregnancy")
-def trigger_pregnancy_transition():
-    return _run_transition("FHIR_PREGNANCY_CONFIRMED")
+def trigger_pregnancy_transition(patient_id: str = "PAT-AE-4092"):
+    return _run_transition("FHIR_PREGNANCY_CONFIRMED", patient_id=patient_id)
 
 
 @app.post("/api/transitions/pregnancy/stream")
-def stream_pregnancy_transition():
+def stream_pregnancy_transition(patient_id: str = "PAT-AE-4092"):
     return StreamingResponse(
-        _stream_transition_events("FHIR_PREGNANCY_CONFIRMED"),
+        _stream_transition_events("FHIR_PREGNANCY_CONFIRMED", patient_id=patient_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
 @app.post("/api/transitions/postpartum")
-def trigger_postpartum_transition():
-    return _run_transition("FHIR_DELIVERY_POSTPARTUM")
+def trigger_postpartum_transition(patient_id: str = "PAT-AE-4092"):
+    return _run_transition("FHIR_DELIVERY_POSTPARTUM", patient_id=patient_id)
 
 
 @app.post("/api/transitions/postpartum/stream")
-def stream_postpartum_transition():
+def stream_postpartum_transition(patient_id: str = "PAT-AE-4092"):
     return StreamingResponse(
-        _stream_transition_events("FHIR_DELIVERY_POSTPARTUM"),
+        _stream_transition_events("FHIR_DELIVERY_POSTPARTUM", patient_id=patient_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -413,7 +463,9 @@ def stream_postpartum_transition():
 
 @app.post("/api/obligations/{obligation_id}/verify")
 def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
-    existing = next((o for o in list_obligations() if o["id"] == obligation_id), None)
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
     if existing is None:
         raise HTTPException(status_code=404, detail="Clinical obligation not found")
     if existing["status"] == "DEFERRED_TO_POSTPARTUM":
@@ -423,14 +475,14 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
             actor=f"SafetyGuard ({rule_ver})",
             summary=(
                 f"Blocked premature closure of {obligation_id} requested by {body.clinician_name}: "
-                "live-vaccine obligation is contraindicated during pregnancy and remains queued for postpartum."
+                "pregnancy-deferred immunization obligation is contraindicated during pregnancy and remains queued for postpartum."
             ),
             obligation_id=obligation_id,
         )
         raise HTTPException(
             status_code=409,
             detail=(
-                "Clinical safety guard: live-vaccine obligation is contraindicated during "
+                "Clinical safety guard: pregnancy-deferred immunization obligation is contraindicated during "
                 "pregnancy and cannot be closed until the Postpartum transition is triggered."
             ),
         )
@@ -450,9 +502,12 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
         summary=f"Closed {obligation_id} with verified evidence{evidence_ref}: {body.closure_evidence}",
         obligation_id=obligation_id,
     )
+    patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
+    obls = list_obligations(patient_id=patient_id)
     return {
         "obligation": updated,
-        "audit_events": list_audit_events(),
+        "audit_events": _filter_audit_events(obls, patient_id),
+        "patients": list_patient_summaries(),
     }
 
 
@@ -472,5 +527,5 @@ def mcp_jsonrpc(payload: dict[str, Any]):
 
 
 @app.post("/api/demo/reset")
-def reset_demo():
-    return reset_obligations()
+def reset_demo(patient_id: str = "PAT-AE-4092"):
+    return reset_obligations(patient_id=patient_id)

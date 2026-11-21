@@ -9,7 +9,11 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
-import { FACILITY_CONTINUITY_STAGES, FLOW_STEPS } from "./constants";
+import {
+  FACILITY_CONTINUITY_STAGES,
+  FLOW_STEPS,
+  PATIENT_FACILITY_STAGES,
+} from "./constants";
 import type { Obligation } from "./types";
 
 interface CareFlowAndPatientHeaderProps {
@@ -37,6 +41,13 @@ export default function CareFlowAndPatientHeader({
   onRunTransition,
   onReset,
 }: CareFlowAndPatientHeaderProps) {
+  const activePatientId = patient?.patient_id ?? "PAT-AE-4092";
+  const facilityStages = PATIENT_FACILITY_STAGES[activePatientId] ?? FACILITY_CONTINUITY_STAGES;
+  const openPrimaryObl = obligations.find(
+    (o) => o.status !== "VERIFIED_CLOSED" && o.status !== "DEFERRED_TO_POSTPARTUM"
+  );
+  const deferredObl = obligations.find((o) => o.status === "DEFERRED_TO_POSTPARTUM");
+
   return (
     <>
       {/* 6-Step Care Continuity Flow */}
@@ -78,7 +89,7 @@ export default function CareFlowAndPatientHeader({
             <h2 className="mt-1 text-base font-semibold text-slate-900">
               {patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)"}{" "}
               <span className="ml-2 font-mono text-xs font-normal text-slate-500">
-                {patient?.patient_id ?? "PAT-AE-4092"}
+                {activePatientId}
               </span>
             </h2>
             <p className="mt-1 text-sm text-slate-600">
@@ -126,7 +137,7 @@ export default function CareFlowAndPatientHeader({
             Care Sites:
           </span>
           <ol className="flex flex-wrap items-center gap-1.5">
-            {FACILITY_CONTINUITY_STAGES.map((stage, idx) => {
+            {facilityStages.map((stage, idx) => {
               const currentFacilityIdx = isPostpartum ? 2 : isAntenatal ? 1 : 0;
               const isDone = stage.stageIndex < currentFacilityIdx;
               const isCurrent = stage.stageIndex === currentFacilityIdx;
@@ -157,7 +168,7 @@ export default function CareFlowAndPatientHeader({
                       {stage.emrSystem} · {stage.dayTag}
                     </span>
                   </span>
-                  {idx < FACILITY_CONTINUITY_STAGES.length - 1 && (
+                  {idx < facilityStages.length - 1 && (
                     <ArrowRight className="h-3 w-3 text-slate-300" aria-hidden="true" />
                   )}
                 </li>
@@ -170,21 +181,27 @@ export default function CareFlowAndPatientHeader({
           <div
             role="note"
             className={`flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-xs leading-relaxed ${
-              isAntenatal && obligations.some((o) => o.id === "OBL-101" && o.status !== "VERIFIED_CLOSED")
+              isAntenatal && openPrimaryObl
                 ? "border-amber-200 bg-amber-50/80 text-amber-950"
                 : "border-slate-200 bg-slate-50 text-slate-700"
             }`}
           >
-            {isAntenatal && obligations.some((o) => o.id === "OBL-101" && o.status !== "VERIFIED_CLOSED") ? (
+            {isAntenatal && openPrimaryObl ? (
               <>
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
                 <p>
                   <span className="font-semibold text-amber-900">
                     Before triggering Postpartum:
                   </span>{" "}
-                  <span className="font-mono font-medium">OBL-101</span> (antenatal TSH follow-up) is still open. You can verify &amp; close it below first, or proceed — Postpartum Transition will carry{" "}
-                  <span className="font-mono">OBL-101</span> forward for 6-week reassessment, reactivate deferred{" "}
-                  <span className="font-mono">OBL-102</span> (MMR) as <span className="font-semibold">URGENT</span>, and call external assistive AI (OpenRouter) with <span className="font-semibold">0 PHI</span> to draft a handoff for clinician sign-off.
+                  <span className="font-mono font-medium">{openPrimaryObl.id}</span> is still open. You can verify &amp; close it below first, or proceed — Postpartum Transition will carry{" "}
+                  <span className="font-mono">{openPrimaryObl.id}</span> forward for 6-week reassessment
+                  {deferredObl ? (
+                    <>
+                      , reactivate deferred <span className="font-mono">{deferredObl.id}</span> as{" "}
+                      <span className="font-semibold">URGENT</span>
+                    </>
+                  ) : null}
+                  , and call external assistive AI (OpenRouter) with <span className="font-semibold">0 PHI</span> to draft a handoff for clinician sign-off.
                 </p>
               </>
             ) : isAntenatal ? (
@@ -194,8 +211,9 @@ export default function CareFlowAndPatientHeader({
                   <span className="font-semibold text-slate-900">
                     Postpartum Transition Notice:
                   </span>{" "}
-                  Runs deterministic postpartum rules (lifting the pregnancy live-vaccine contraindication and reactivating{" "}
-                  <span className="font-mono">OBL-102</span> as <span className="font-semibold">URGENT</span>), strips all UAE PHI, and calls OpenRouter solely to draft an assistive OB-GYN handoff pending clinician approval.
+                  Runs deterministic postpartum rules (lifting pregnancy deferral guards and reactivating{" "}
+                  <span className="font-mono">{deferredObl?.id ?? "deferred obligations"}</span> as{" "}
+                  <span className="font-semibold">URGENT</span>), strips all UAE PHI, and calls OpenRouter solely to draft an assistive OB-GYN handoff pending clinician approval.
                 </p>
               </>
             ) : (
