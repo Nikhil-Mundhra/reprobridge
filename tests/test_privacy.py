@@ -10,6 +10,7 @@ from api.privacy import (
     build_obligation_explain_payload,
     deidentify_obligation,
     pseudonymize_patient_id,
+    scrub_explanation_for_tts,
     scrub_text_phi,
 )
 
@@ -100,3 +101,14 @@ def test_build_obligation_explain_payload_scrubs_phi_and_passes_firewall():
     ):
         assert leaked not in serialized
     assert "4.8 mIU/L" in serialized
+
+
+def test_scrub_explanation_for_tts_redacts_phi_before_audio_egress():
+    raw_text = (
+        "Amina Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, "
+        "shows elevated TSH 4.8 mIU/L."
+    )
+    scrubbed = scrub_explanation_for_tts(raw_text, SEED_OBLIGATIONS[0])
+    for leaked in ("Amina", "Al-Mansoori", "PAT-AE-4092", "784-1992-1234567-1"):
+        assert leaked not in scrubbed
+    assert "4.8 mIU/L" in scrubbed

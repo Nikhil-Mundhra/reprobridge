@@ -9,11 +9,6 @@ import {
   DOCS_PREFS_COOKIE,
   readDocsSessionPrefs,
 } from "../demo/docsSessionPrefs";
-import {
-  formatForSpeech,
-  getRankedEnglishVoices,
-  splitIntoSentences,
-} from "../demo/speechUtils";
 import PrototypeDemo, {
   SAMPLE_IMPORT_CSV,
   buildOutboundFhirBundle,
@@ -1181,39 +1176,7 @@ describe("<ClinicalMetricVisualizer /> clinical range bars", () => {
 });
 
 describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
-  it("ranks neural/Google voices above compact macOS voices and formats clinical terms for natural speech", () => {
-    const sampleVoices = [
-      { name: "Zarvox", lang: "en-US", voiceURI: "Zarvox", localService: true },
-      { name: "Fred", lang: "en-US", voiceURI: "Fred", localService: true },
-      { name: "Samantha", lang: "en-US", voiceURI: "Samantha", localService: true },
-      { name: "Daniel", lang: "en-GB", voiceURI: "Daniel", localService: true },
-      { name: "Google US English", lang: "en-US", voiceURI: "Google US English", localService: false },
-      { name: "Samantha (Enhanced)", lang: "en-US", voiceURI: "Samantha Enhanced", localService: true },
-      { name: "Microsoft Aria Online (Natural) - English (United States)", lang: "en-US", voiceURI: "Aria", localService: false },
-      { name: "Thomas", lang: "fr-FR", voiceURI: "Thomas", localService: true },
-    ] as SpeechSynthesisVoice[];
-
-    const ranked = getRankedEnglishVoices(sampleVoices);
-    expect(ranked.map((v) => v.name)).toEqual([
-      "Microsoft Aria Online (Natural) - English (United States)",
-      "Samantha (Enhanced)",
-      "Google US English",
-      "Daniel",
-      "Samantha",
-    ]);
-
-    const spoken = formatForSpeech(
-      "TSH 4.8 mIU/L (ESCALATED_FOR_REVIEW). T1 target 0.1–2.5 for OB-GYN."
-    );
-    expect(spoken).toBe(
-      "T S H 4.8 milli-international units per liter (escalated for review). trimester one target 0.1 to 2.5 for O B G Y N."
-    );
-    expect(splitIntoSentences(spoken)).toEqual([
-      "T S H 4.8 milli-international units per liter (escalated for review).",
-      "trimester one target 0.1 to 2.5 for O B G Y N.",
-    ]);
-
-    // Partial and complete SSE explanation parsing
+  it("parses partial and complete SSE explanation streams accurately", () => {
     expect(parseStreamedExplanation("HEADLINE:\nElevated TSH")).toEqual({
       headline: "Elevated TSH",
       explanation: "",
@@ -1230,56 +1193,39 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
     });
   });
 
-  it("opens floating AI Clinical Explainer from OBL-101 Explain button, picks Google voice at 1x, chains sentences, and cancels on close", async () => {
+  it("opens floating AI Clinical Explainer from OBL-101 Explain button, plays ElevenLabs neural audio, and pauses on close", async () => {
     const user = userEvent.setup();
 
-    const speakMock = vi.fn();
-    const cancelMock = vi.fn();
+    const playMock = vi.fn().mockResolvedValue(undefined);
     const pauseMock = vi.fn();
-    const resumeMock = vi.fn();
-    const getVoicesMock = vi.fn(
-      () =>
-        [
-          { name: "Samantha", lang: "en-US", voiceURI: "Samantha", localService: true },
-          { name: "Fred", lang: "en-US", voiceURI: "Fred", localService: true },
-          {
-            name: "Google US English",
-            lang: "en-US",
-            voiceURI: "Google US English",
-            localService: false,
-          },
-        ] as SpeechSynthesisVoice[]
-    );
+    let createdAudioUrl = "";
 
-    const prevSpeech = Object.getOwnPropertyDescriptor(window, "speechSynthesis");
-    const prevUtterance = (globalThis as { SpeechSynthesisUtterance?: unknown })
-      .SpeechSynthesisUtterance;
+    const prevAudio = (globalThis as { Audio?: unknown }).Audio;
+    const prevCreateObjectURL = URL.createObjectURL;
+    const prevRevokeObjectURL = URL.revokeObjectURL;
 
-    class MockUtterance {
-      text: string;
-      rate = 1;
-      pitch = 1;
-      voice: SpeechSynthesisVoice | null = null;
-      onend: (() => void) | null = null;
-      constructor(text: string) {
-        this.text = text;
+    class MockAudio {
+      src: string;
+      playbackRate = 1;
+      currentTime = 0;
+      ended = false;
+      onplay: (() => void) | null = null;
+      onpause: (() => void) | null = null;
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(src: string) {
+        this.src = src;
+        createdAudioUrl = src;
       }
+      play = playMock;
+      pause = pauseMock;
     }
 
-    Object.defineProperty(window, "speechSynthesis", {
-      configurable: true,
-      value: {
-        speak: speakMock,
-        cancel: cancelMock,
-        pause: pauseMock,
-        resume: resumeMock,
-        getVoices: getVoicesMock,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      },
-    });
-    (globalThis as { SpeechSynthesisUtterance: unknown }).SpeechSynthesisUtterance = MockUtterance;
+    (globalThis as { Audio: unknown }).Audio = MockAudio;
+    URL.createObjectURL = vi.fn(() => "blob:reprobridge-elevenlabs-audio");
+    URL.revokeObjectURL = vi.fn();
 
+    let requestedTtsText = "";
     const obls = makeSeedObligations();
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -1291,6 +1237,7 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
           status: "ok",
           residency_policy: "UAE_PHI_LOCAL_ONLY",
           ai_provider: { provider: "openrouter", configured: true, model: "google/gemma-4-31b-it:free" },
+          audio_provider: { provider: "elevenlabs", configured: true, model: "eleven_v4" },
           database: { provider: "neon-postgres", connected: true, branch: "main", pooled: true, detail: "Connected" },
         });
       }
@@ -1336,6 +1283,14 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
           },
         ]);
       }
+      if (pathname === "/api/obligations/OBL-101/explain/audio" && method === "POST") {
+        const parsedBody = JSON.parse(String(init?.body ?? "{}")) as { text?: string };
+        requestedTtsText = parsedBody.text ?? "";
+        return new Response(new Uint8Array([73, 68, 51]), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        });
+      }
       return createJsonResponse({ detail: "Not mocked" }, 404);
     });
 
@@ -1355,41 +1310,27 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
         await within(explainer).findByText("Elevated Thyroid-Stimulating Hormone (Preconception)")
       ).toBeInTheDocument();
       expect(within(explainer).getByText("UAE Firewall · 0 PHI")).toBeInTheDocument();
-
-      const voiceSelect = within(explainer).getByRole("combobox", { name: /Narrator voice/i });
-      expect(voiceSelect).toHaveValue("Google US English");
-      expect(within(voiceSelect).queryByRole("option", { name: "Fred" })).not.toBeInTheDocument();
+      expect(within(explainer).getByText("ElevenLabs")).toBeInTheDocument();
 
       await user.click(within(explainer).getByRole("button", { name: /Listen/i }));
-      expect(speakMock).toHaveBeenCalledTimes(1);
-      const firstUtterance = speakMock.mock.calls[0][0] as MockUtterance;
-      expect(firstUtterance.rate).toBe(1);
-      expect(firstUtterance.voice?.name).toBe("Google US English");
-      expect(firstUtterance.text).toBe("Elevated Thyroid-Stimulating Hormone (Preconception).");
-
-      // Advance to next sentence after brief natural pause
-      firstUtterance.onend?.();
       await waitFor(() => {
-        expect(speakMock).toHaveBeenCalledTimes(2);
+        expect(playMock).toHaveBeenCalledTimes(1);
       });
-      const secondUtterance = speakMock.mock.calls[1][0] as MockUtterance;
-      expect(secondUtterance.text).toContain("T S H of 4.8 milli-international units per liter");
+      expect(createdAudioUrl).toBe("blob:reprobridge-elevenlabs-audio");
+      expect(requestedTtsText).toContain("TSH of 4.8 mIU/L");
 
       await user.click(within(explainer).getByRole("button", { name: /Close AI explainer/i }));
-      expect(cancelMock).toHaveBeenCalled();
+      expect(pauseMock).toHaveBeenCalled();
       expect(screen.queryByRole("dialog", { name: /AI Clinical Explainer/i })).not.toBeInTheDocument();
     } finally {
       vi.restoreAllMocks();
-      if (prevSpeech) {
-        Object.defineProperty(window, "speechSynthesis", prevSpeech);
+      if (prevAudio !== undefined) {
+        (globalThis as { Audio?: unknown }).Audio = prevAudio;
       } else {
-        delete (window as unknown as { speechSynthesis?: unknown }).speechSynthesis;
+        delete (globalThis as { Audio?: unknown }).Audio;
       }
-      if (prevUtterance !== undefined) {
-        (globalThis as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance = prevUtterance;
-      } else {
-        delete (globalThis as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance;
-      }
+      URL.createObjectURL = prevCreateObjectURL;
+      URL.revokeObjectURL = prevRevokeObjectURL;
     }
   });
 });

@@ -3,7 +3,8 @@ import os
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -24,12 +25,14 @@ from api.db import (
 )
 from api.mcp_server import call_mcp_tool, handle_mcp_jsonrpc, list_mcp_tools
 from api.openrouter import (
+    DEFAULT_ELEVENLABS_MODEL_ID,
     DEFAULT_OPENROUTER_MODEL,
     explain_deidentified_obligation,
     stream_deidentified_brief,
     stream_deidentified_explanation,
+    synthesize_elevenlabs_audio,
 )
-from api.privacy import build_obligation_explain_payload
+from api.privacy import build_obligation_explain_payload, scrub_explanation_for_tts
 from api.workflow import (
     TransitionState,
     apply_uae_privacy_firewall,
@@ -56,6 +59,10 @@ class VerifyClosureRequest(BaseModel):
     clinician_name: str = Field(..., min_length=2, max_length=128)
     closure_evidence: str = Field(..., min_length=4, max_length=1000)
     evidence_id: str | None = Field(default=None, max_length=64)
+
+
+class ExplainAudioRequest(BaseModel):
+    text: str = Field(..., min_length=4, max_length=2500)
 
 
 class ObligationIntakeItem(BaseModel):
@@ -295,6 +302,14 @@ def health():
             "configured": bool(os.getenv("OPENROUTER_API_KEY", "").strip()),
             "model": os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL),
         },
+        "audio_provider": {
+            "provider": "elevenlabs",
+            "configured": bool(os.getenv("ELEVENLABS_API_KEY", "").strip()),
+            "model": (
+                os.getenv("ELEVENLABS_MODEL_ID", DEFAULT_ELEVENLABS_MODEL_ID).strip()
+                or DEFAULT_ELEVENLABS_MODEL_ID
+            ),
+        },
         "database": check_database_health(),
     }
 
@@ -331,21 +346,30 @@ def get_obligations(patient_id: str = "PAT-AE-4092"):
     }
 
 
-def _next_obligation_id(existing: list[dict[str, Any]], patient_id: str = "PAT-AE-4092") -> str:
+def _next_obligation_id(
+    existing: list[dict[str, Any]],
+    patient_id: str = "PAT-AE-4092",
+    reserved_ids: set[str] | None = None,
+) -> str:
     id_base = int(PATIENT_COHORT_META.get(patient_id, {}).get("id_base", 100))
     nums = []
     for item in existing:
         raw = str(item.get("id", ""))
         if raw.startswith("OBL-") and raw[4:].isdigit():
             nums.append(int(raw[4:]))
-    return f"OBL-{max(nums, default=id_base) + 1}"
+    candidate = max(nums, default=id_base) + 1
+    taken = reserved_ids or {str(item.get("id", "")) for item in existing}
+    while f"OBL-{candidate}" in taken:
+        candidate += 1
+    return f"OBL-{candidate}"
 
 
 @app.post("/api/obligations/import")
 def import_obligations(body: ObligationImportRequest):
     """Ingest one or more clinical obligations from manual input or CSV/TSV table import."""
     target_pid = (body.obligations[0].patient_id or "PAT-AE-4092").strip() or "PAT-AE-4092"
-    current = list_obligations(patient_id=target_pid)
+    all_existing = list_obligations(patient_id="ALL")
+    current = [o for o in all_existing if o.get("patient_id") == target_pid]
     created: list[dict[str, Any]] = []
     for item in body.obligations:
         pid = (item.patient_id or target_pid).strip() or target_pid
@@ -353,7 +377,12 @@ def import_obligations(body: ObligationImportRequest):
             PATIENT_COHORT_META.get(pid, {}).get("patient_name", "Amina Al-Mansoori (Synthetic)")
         )
         same_patient_existing = [o for o in current + created if o.get("patient_id") == pid]
-        obl_id = (item.id or "").strip() or _next_obligation_id(same_patient_existing, pid)
+        reserved_ids = {str(o.get("id", "")) for o in all_existing + created}
+        obl_id = (item.id or "").strip() or _next_obligation_id(
+            same_patient_existing,
+            pid,
+            reserved_ids=reserved_ids,
+        )
         priority = (item.priority or "MEDIUM").strip().upper()
         if priority not in {"URGENT", "HIGH", "MEDIUM"}:
             priority = "MEDIUM"
@@ -622,6 +651,43 @@ def stream_explain_obligation(obligation_id: str) -> StreamingResponse:
         _stream_obligation_explanation(existing),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/obligations/{obligation_id}/explain/audio")
+def synthesize_explain_obligation_audio(
+    obligation_id: str,
+    body: ExplainAudioRequest,
+) -> Response:
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+
+    scrubbed_text = scrub_explanation_for_tts(body.text, existing)
+
+    if not os.getenv("ELEVENLABS_API_KEY", "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ELEVENLABS_API_KEY is not configured. Add it to your environment to enable "
+                "ElevenLabs neural voice playback."
+            ),
+        )
+
+    try:
+        audio_bytes = synthesize_elevenlabs_audio(scrubbed_text)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"ElevenLabs neural TTS request failed ({type(exc).__name__}).",
+        ) from exc
+
+    return Response(
+        content=audio_bytes,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-cache"},
     )
 
 

@@ -191,6 +191,14 @@ def build_obligation_explain_payload(obligation: dict[str, Any]) -> dict[str, An
     }
 
 
+def scrub_explanation_for_tts(text: str, obligation: dict[str, Any]) -> str:
+    """Scrub any PHI tokens from explanation text and verify zero PHI before TTS egress."""
+    forbidden_tokens = _extract_forbidden_tokens(obligation)
+    scrubbed = scrub_text_phi(text, forbidden_tokens).strip()
+    assert_phi_free({"text": scrubbed}, forbidden_tokens=forbidden_tokens)
+    return scrubbed
+
+
 def assert_phi_free(payload: Any, forbidden_tokens: list[str] | None = None) -> None:
     """Hard guardrail: raise PrivacyViolationError if any PHI appears in outbound data."""
     serialized = json.dumps(payload, default=str)

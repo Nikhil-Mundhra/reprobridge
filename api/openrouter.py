@@ -28,6 +28,10 @@ FREE_FALLBACK_MODELS: list[str] = [
     "openrouter/free",
 ]
 
+ELEVENLABS_TTS_URL_TEMPLATE = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+DEFAULT_ELEVENLABS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"
+DEFAULT_ELEVENLABS_MODEL_ID = "eleven_v4"
+
 SYSTEM_PROMPT = (
     "You are ReproBridge's assistive care-coordination synthesizer. "
     "You receive ONLY de-identified clinical obligation metadata (never PHI). "
@@ -673,3 +677,44 @@ def stream_deidentified_explanation(
             reason=f"OpenRouter stream unavailable ({type(exc).__name__})",
         )
         yield {"type": "done", "result": fb}
+
+
+def synthesize_elevenlabs_audio(
+    deidentified_text: str,
+    *,
+    timeout_seconds: float = 25.0,
+) -> bytes:
+    """Synthesize MP3 neural speech via ElevenLabs from strictly de-identified text."""
+    assert_phi_free({"text": deidentified_text})
+
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY is not configured")
+
+    voice_id = (
+        os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID).strip()
+        or DEFAULT_ELEVENLABS_VOICE_ID
+    )
+    model_id = (
+        os.getenv("ELEVENLABS_MODEL_ID", DEFAULT_ELEVENLABS_MODEL_ID).strip()
+        or DEFAULT_ELEVENLABS_MODEL_ID
+    )
+    url = ELEVENLABS_TTS_URL_TEMPLATE.format(voice_id=voice_id)
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+    payload = {
+        "text": deidentified_text,
+        "model_id": model_id,
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+        },
+    }
+
+    with httpx.Client(timeout=timeout_seconds) as client:
+        response = client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.content

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Loader2,
   Pause,
   Play,
   RotateCcw,
@@ -9,11 +10,6 @@ import {
   X,
 } from "lucide-react";
 import { parseStreamedExplanation } from "./helpers";
-import {
-  formatForSpeech,
-  getRankedEnglishVoices,
-  splitIntoSentences,
-} from "./speechUtils";
 import type { Obligation, ObligationExplanationResponse } from "./types";
 
 interface ObligationExplainerPopoverProps {
@@ -29,28 +25,25 @@ interface ObligationExplainerPopoverProps {
   onClose: () => void;
 }
 
-type AudioState = "idle" | "playing" | "paused";
+type AudioState = "idle" | "loading" | "playing" | "paused";
 
-const RATE_OPTIONS = [1.0, 0.95, 1.1] as const;
-const SENTENCE_PAUSE_MS = 160;
-
-function isSpeechSupported(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    "speechSynthesis" in window &&
-    typeof window.speechSynthesis !== "undefined" &&
-    typeof SpeechSynthesisUtterance !== "undefined"
-  );
-}
-
-function getVoiceKey(voice: SpeechSynthesisVoice): string {
-  return voice.voiceURI || `${voice.name}|${voice.lang}`;
-}
+const RATE_OPTIONS = [1.0, 0.95, 1.15] as const;
 
 function ensureSentencePeriod(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return "";
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function buildSpokenScript(data: ObligationExplanationResponse): string {
+  return [
+    data.headline,
+    data.explanation,
+    ...(data.key_points.length > 0 ? ["Key takeaways.", ...data.key_points] : []),
+  ]
+    .map(ensureSentencePeriod)
+    .filter(Boolean)
+    .join(" ");
 }
 
 export default function ObligationExplainerPopover({
@@ -66,195 +59,196 @@ export default function ObligationExplainerPopover({
   onClose,
 }: ObligationExplainerPopoverProps) {
   const [audioState, setAudioState] = useState<AudioState>("idle");
+  const [audioError, setAudioError] = useState<string | null>(null);
   const [rateIndex, setRateIndex] = useState(0);
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(() =>
-    isSpeechSupported()
-      ? getRankedEnglishVoices(window.speechSynthesis.getVoices?.() ?? [])
-      : []
-  );
-  const [selectedVoiceKey, setSelectedVoiceKey] = useState<string | null>(null);
 
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const pauseTimerRef = useRef<number | null>(null);
-  const playbackTokenRef = useRef(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioAbortRef = useRef<AbortController | null>(null);
+  const audioUrlCacheRef = useRef<Map<string, string>>(new Map());
 
-  const speechAvailable = isSpeechSupported();
   const rate = RATE_OPTIONS[rateIndex];
-  const activeVoice =
-    voices.find((v) => getVoiceKey(v) === selectedVoiceKey) ?? voices[0] ?? null;
 
-  useEffect(() => {
-    if (!isSpeechSupported()) return;
-    const synth = window.speechSynthesis;
-
-    const refreshVoices = () => {
-      setVoices(getRankedEnglishVoices(synth.getVoices?.() ?? []));
-    };
-
-    refreshVoices();
-    synth.addEventListener?.("voiceschanged", refreshVoices);
-    return () => {
-      synth?.removeEventListener?.("voiceschanged", refreshVoices);
-    };
-  }, []);
-
-  const stopSpeech = useCallback(() => {
-    playbackTokenRef.current += 1;
-    if (pauseTimerRef.current !== null) {
-      window.clearTimeout(pauseTimerRef.current);
-      pauseTimerRef.current = null;
+  const stopAudio = useCallback(() => {
+    audioAbortRef.current?.abort();
+    audioAbortRef.current = null;
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      } catch {
+        // Ignore media reset errors in non-browser test runners
+      }
+      audioRef.current = null;
     }
-    utteranceRef.current = null;
     setAudioState("idle");
-    if (isSpeechSupported()) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // Ignore speech cancellation errors in constrained webviews
-      }
-    }
   }, []);
 
   useEffect(() => {
-    stopSpeech();
+    stopAudio();
+    setAudioError(null);
     return () => {
-      stopSpeech();
+      stopAudio();
     };
-  }, [obligation?.id, data?.explanation, stopSpeech]);
+  }, [obligation?.id, data?.explanation, stopAudio]);
 
-  const speakAtConfig = useCallback(
-    (targetRate: number, targetVoice: SpeechSynthesisVoice | null) => {
-      if (!data || !isSpeechSupported()) return;
-
-      playbackTokenRef.current += 1;
-      const token = playbackTokenRef.current;
-
-      if (pauseTimerRef.current !== null) {
-        window.clearTimeout(pauseTimerRef.current);
-        pauseTimerRef.current = null;
-      }
-
-      try {
-        window.speechSynthesis.cancel();
-
-        const rawParts = [
-          data.headline,
-          data.explanation,
-          ...(data.key_points.length > 0 ? ["Key takeaways.", ...data.key_points] : []),
-        ]
-          .map(ensureSentencePeriod)
-          .filter(Boolean);
-
-        const sentences = splitIntoSentences(formatForSpeech(rawParts.join(" ")));
-        if (sentences.length === 0) {
-          setAudioState("idle");
-          return;
+  useEffect(() => {
+    const cache = audioUrlCacheRef.current;
+    return () => {
+      for (const url of cache.values()) {
+        try {
+          URL.revokeObjectURL?.(url);
+        } catch {
+          // Ignore URL revocation errors
         }
-
-        const chosenVoice =
-          targetVoice ??
-          getRankedEnglishVoices(window.speechSynthesis.getVoices?.() ?? [])[0] ??
-          null;
-
-        const playSentence = (index: number) => {
-          if (playbackTokenRef.current !== token) return;
-          if (index >= sentences.length) {
-            utteranceRef.current = null;
-            setAudioState("idle");
-            return;
-          }
-
-          const utterance = new SpeechSynthesisUtterance(sentences[index]);
-          utterance.rate = targetRate;
-          utterance.pitch = 1.0;
-          if (chosenVoice) {
-            utterance.voice = chosenVoice;
-          }
-
-          utterance.onstart = () => {
-            if (playbackTokenRef.current === token) {
-              setAudioState("playing");
-            }
-          };
-          utterance.onpause = () => {
-            if (playbackTokenRef.current === token) {
-              setAudioState("paused");
-            }
-          };
-          utterance.onresume = () => {
-            if (playbackTokenRef.current === token) {
-              setAudioState("playing");
-            }
-          };
-          utterance.onend = () => {
-            if (playbackTokenRef.current !== token) return;
-            pauseTimerRef.current = window.setTimeout(() => {
-              pauseTimerRef.current = null;
-              playSentence(index + 1);
-            }, SENTENCE_PAUSE_MS);
-          };
-          utterance.onerror = () => {
-            if (playbackTokenRef.current === token) {
-              utteranceRef.current = null;
-              setAudioState("idle");
-            }
-          };
-
-          utteranceRef.current = utterance;
-          window.speechSynthesis.speak(utterance);
-        };
-
-        setAudioState("playing");
-        playSentence(0);
-      } catch {
-        utteranceRef.current = null;
-        setAudioState("idle");
       }
-    },
-    [data]
-  );
+      cache.clear();
+    };
+  }, []);
+
+  const playFromObjectUrl = useCallback(async (objectUrl: string, targetRate: number) => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+      } catch {
+        // Ignore pause errors
+      }
+    }
+
+    const audio = new Audio(objectUrl);
+    audio.playbackRate = targetRate;
+    audio.onplay = () => setAudioState("playing");
+    audio.onpause = () => {
+      if (!audio.ended) {
+        setAudioState("paused");
+      }
+    };
+    audio.onended = () => {
+      setAudioState("idle");
+    };
+    audio.onerror = () => {
+      setAudioState("idle");
+      setAudioError("Unable to play ElevenLabs neural audio stream.");
+    };
+
+    audioRef.current = audio;
+    setAudioState("playing");
+    await audio.play();
+  }, []);
+
+  const startPlayback = useCallback(async () => {
+    if (!obligation || !data) return;
+    setAudioError(null);
+
+    const script = buildSpokenScript(data);
+    const cacheKey = `${obligation.id}:${script}`;
+    const cachedUrl = audioUrlCacheRef.current.get(cacheKey);
+    if (cachedUrl) {
+      try {
+        await playFromObjectUrl(cachedUrl, rate);
+      } catch (err) {
+        setAudioState("idle");
+        setAudioError(
+          err instanceof Error ? err.message : "Unable to start ElevenLabs audio playback."
+        );
+      }
+      return;
+    }
+
+    audioAbortRef.current?.abort();
+    const controller = new AbortController();
+    audioAbortRef.current = controller;
+    setAudioState("loading");
+
+    try {
+      const res = await fetch(
+        `/api/obligations/${encodeURIComponent(obligation.id)}/explain/audio`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: script }),
+          signal: controller.signal,
+        }
+      );
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(
+          errBody.detail || `ElevenLabs neural voice request failed (HTTP ${res.status})`
+        );
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      audioUrlCacheRef.current.set(cacheKey, objectUrl);
+      await playFromObjectUrl(objectUrl, rate);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
+      setAudioState("idle");
+      setAudioError(
+        err instanceof Error ? err.message : "Unable to synthesize ElevenLabs neural audio."
+      );
+    } finally {
+      if (audioAbortRef.current === controller) {
+        audioAbortRef.current = null;
+      }
+    }
+  }, [obligation, data, playFromObjectUrl, rate]);
 
   function handlePlayPause() {
-    if (!data || !speechAvailable) return;
+    if (!data || audioState === "loading") return;
     if (audioState === "playing") {
       try {
-        window.speechSynthesis.pause?.();
+        audioRef.current?.pause();
         setAudioState("paused");
       } catch {
-        stopSpeech();
+        stopAudio();
       }
       return;
     }
-    if (audioState === "paused") {
+    if (audioState === "paused" && audioRef.current) {
       try {
-        window.speechSynthesis.resume?.();
+        audioRef.current.playbackRate = rate;
         setAudioState("playing");
+        void audioRef.current.play();
       } catch {
-        speakAtConfig(rate, activeVoice);
+        void startPlayback();
       }
       return;
     }
-    speakAtConfig(rate, activeVoice);
+    void startPlayback();
+  }
+
+  function handleReplay() {
+    if (audioRef.current) {
+      try {
+        audioRef.current.currentTime = 0;
+        audioRef.current.playbackRate = rate;
+        setAudioState("playing");
+        void audioRef.current.play();
+        return;
+      } catch {
+        // Fall through to fresh playback
+      }
+    }
+    void startPlayback();
   }
 
   function handleCycleRate() {
     const nextIdx = (rateIndex + 1) % RATE_OPTIONS.length;
+    const nextRate = RATE_OPTIONS[nextIdx];
     setRateIndex(nextIdx);
-    if (audioState === "playing") {
-      speakAtConfig(RATE_OPTIONS[nextIdx], activeVoice);
-    }
-  }
-
-  function handleVoiceChange(nextKey: string) {
-    setSelectedVoiceKey(nextKey);
-    const nextVoice = voices.find((v) => getVoiceKey(v) === nextKey) ?? null;
-    if (audioState === "playing" || audioState === "paused") {
-      speakAtConfig(rate, nextVoice);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextRate;
     }
   }
 
   function handleClose() {
-    stopSpeech();
+    stopAudio();
     onClose();
   }
 
@@ -408,52 +402,49 @@ export default function ObligationExplainerPopover({
 
         {data && (
           <div className="space-y-3">
-            {/* Audio Controls Bar */}
+            {/* ElevenLabs Neural Audio Controls Bar */}
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2">
               <div className="flex items-center gap-1.5">
-                {speechAvailable ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handlePlayPause}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-2.5 py-1 text-[11px] font-semibold text-white shadow-2xs transition hover:bg-teal-700"
-                    >
-                      {audioState === "playing" ? (
-                        <>
-                          <Pause className="h-3 w-3" aria-hidden="true" />
-                          Pause
-                        </>
-                      ) : audioState === "paused" ? (
-                        <>
-                          <Play className="h-3 w-3" aria-hidden="true" />
-                          Resume
-                        </>
-                      ) : (
-                        <>
-                          <Volume2 className="h-3 w-3" aria-hidden="true" />
-                          Listen
-                        </>
-                      )}
-                    </button>
+                <button
+                  type="button"
+                  onClick={handlePlayPause}
+                  disabled={audioState === "loading"}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-2.5 py-1 text-[11px] font-semibold text-white shadow-2xs transition hover:bg-teal-700 disabled:opacity-60"
+                >
+                  {audioState === "loading" ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                      Generating…
+                    </>
+                  ) : audioState === "playing" ? (
+                    <>
+                      <Pause className="h-3 w-3" aria-hidden="true" />
+                      Pause
+                    </>
+                  ) : audioState === "paused" ? (
+                    <>
+                      <Play className="h-3 w-3" aria-hidden="true" />
+                      Resume
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 className="h-3 w-3" aria-hidden="true" />
+                      Listen
+                    </>
+                  )}
+                </button>
 
-                    {audioState !== "idle" && (
-                      <button
-                        type="button"
-                        onClick={() => speakAtConfig(rate, activeVoice)}
-                        aria-label="Replay audio explanation"
-                        title="Replay from start"
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-100"
-                      >
-                        <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                        Replay
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-400">
-                    <Volume2 className="h-3 w-3" aria-hidden="true" />
-                    Audio unavailable
-                  </span>
+                {(audioState === "playing" || audioState === "paused") && (
+                  <button
+                    type="button"
+                    onClick={handleReplay}
+                    aria-label="Replay audio explanation"
+                    title="Replay from start"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-100"
+                  >
+                    <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                    Replay
+                  </button>
                 )}
               </div>
 
@@ -471,35 +462,28 @@ export default function ObligationExplainerPopover({
                     Speaking
                   </span>
                 )}
-                {speechAvailable && voices.length > 0 && (
-                  <select
-                    aria-label="Narrator voice"
-                    value={activeVoice ? getVoiceKey(activeVoice) : ""}
-                    onChange={(e) => handleVoiceChange(e.target.value)}
-                    className="max-w-[140px] truncate rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-700 transition hover:border-teal-300 focus:border-teal-500 focus:outline-none"
-                  >
-                    {voices.map((voice) => {
-                      const key = getVoiceKey(voice);
-                      return (
-                        <option key={key} value={key}>
-                          {voice.name}
-                        </option>
-                      );
-                    })}
-                  </select>
-                )}
-                {speechAvailable && (
-                  <button
-                    type="button"
-                    onClick={handleCycleRate}
-                    aria-label={`Change playback speed (currently ${rate}x)`}
-                    className="rounded-md border border-slate-200 bg-white px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-600 transition hover:border-teal-300 hover:text-teal-800"
-                  >
-                    {rate}x
-                  </button>
-                )}
+                <span className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] font-medium text-slate-500">
+                  ElevenLabs
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCycleRate}
+                  aria-label={`Change playback speed (currently ${rate}x)`}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-600 transition hover:border-teal-300 hover:text-teal-800"
+                >
+                  {rate}x
+                </button>
               </div>
             </div>
+
+            {audioError && (
+              <p
+                role="alert"
+                className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-800"
+              >
+                {audioError}
+              </p>
+            )}
 
             <div>
               <h4 className="text-sm font-semibold text-slate-900">{data.headline}</h4>

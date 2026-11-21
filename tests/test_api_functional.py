@@ -260,4 +260,39 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
     missing_stream = client.post("/api/obligations/OBL-999/explain/stream")
     assert missing_stream.status_code == 404
 
+    # ElevenLabs neural TTS endpoint: 404 on unknown ID, 503 when key unset, 200 audio/mpeg when configured
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    missing_audio = client.post(
+        "/api/obligations/OBL-999/explain/audio",
+        json={"text": "TSH of 4.8 mIU/L requires repeat follow-up."},
+    )
+    assert missing_audio.status_code == 404
+
+    unconfigured_audio = client.post(
+        "/api/obligations/OBL-101/explain/audio",
+        json={"text": "TSH of 4.8 mIU/L requires repeat follow-up."},
+    )
+    assert unconfigured_audio.status_code == 503
+
+    captured_tts: list[str] = []
+
+    def fake_elevenlabs_tts(text: str) -> bytes:
+        captured_tts.append(text)
+        return b"ID3-FAKE-ELEVENLABS-MP3"
+
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-elevenlabs-key")
+    monkeypatch.setattr("api.index.synthesize_elevenlabs_audio", fake_elevenlabs_tts)
+
+    audio_resp = client.post(
+        "/api/obligations/OBL-101/explain/audio",
+        json={"text": "Amina Al-Mansoori (PAT-AE-4092) has elevated TSH 4.8 mIU/L."},
+    )
+    assert audio_resp.status_code == 200
+    assert audio_resp.headers["content-type"].startswith("audio/mpeg")
+    assert audio_resp.content == b"ID3-FAKE-ELEVENLABS-MP3"
+    assert len(captured_tts) == 1
+    assert "Amina" not in captured_tts[0]
+    assert "PAT-AE-4092" not in captured_tts[0]
+    assert "4.8 mIU/L" in captured_tts[0]
+
     client.post("/api/demo/reset")
