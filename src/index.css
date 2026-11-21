@@ -342,3 +342,76 @@ dialog.rb-doc-drawer::backdrop {
     print-color-adjust: exact;
   }
 }
+
+/* Compact, scroll-aware top navigation bar (modern-web-guidance: content-first-noise-reduction + navbar) */
+html {
+  container-type: scroll-state;
+}
+
+.rb-demo-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  transition: transform 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rb-demo-topbar {
+    transition: none;
+  }
+}
+
+@container scroll-state((scrolled: bottom) and (scrollable: top)) {
+  .rb-demo-topbar:not(:focus-within) {
+    transform: translateY(-100%);
+  }
+}
+
+.rb-status-popover[popover] {
+  position: fixed;
+  position-area: block-end span-inline-start;
+  position-try-fallbacks: flip-block, flip-inline;
+  inset: auto;
+  height: auto;
+  margin: 0;
+  margin-block-start: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+  opacity: 0;
+  transition-property: opacity, transform, display, overlay;
+  transition-duration: 0.16s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .rb-status-popover[popover] {
+    transform: translateY(-4px);
+  }
+}
+
+.rb-status-popover[popover]:is(:popover-open, .\:popover-open) {
+  opacity: 1;
+
+  @starting-style {
+    opacity: 0;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    transform: translateY(0);
+
+    @starting-style {
+      transform: translateY(-4px);
+    }
+  }
+}
+
+@supports not (position-area: block-end) {
+  .rb-status-popover[popover] {
+    position: fixed;
+    margin: 0;
+  }
+}
