@@ -97,6 +97,56 @@ export function parseStreamedSections(raw: string): { summary: string; handoff: 
   };
 }
 
+export function parseStreamedExplanation(raw: string): {
+  headline: string;
+  explanation: string;
+  key_points: string[];
+} {
+  let cleaned = raw.trim();
+  if (!cleaned) {
+    return { headline: "", explanation: "", key_points: [] };
+  }
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+  }
+
+  const markerRe = /(?:^|\n)\s*(HEADLINE|EXPLANATION|KEY_POINTS)\s*:\s*/gi;
+  const matches: Array<{ name: string; start: number; end: number }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = markerRe.exec(cleaned)) !== null) {
+    matches.push({
+      name: match[1].toUpperCase(),
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+
+  if (matches.length === 0) {
+    return {
+      headline: cleaned.replace(/^HEADLINE:\s*/i, "").trim(),
+      explanation: "",
+      key_points: [],
+    };
+  }
+
+  const sections: Record<string, string> = {};
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    const nextStart = i + 1 < matches.length ? matches[i + 1].start : cleaned.length;
+    sections[cur.name] = cleaned.slice(cur.end, nextStart).trim();
+  }
+
+  const headline = (sections.HEADLINE ?? "").replace(/\s*\n+\s*/g, " ").trim();
+  const explanation = (sections.EXPLANATION ?? "").replace(/\s*\n+\s*/g, " ").trim();
+  const key_points = (sections.KEY_POINTS ?? "")
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[•*-]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+
+  return { headline, explanation, key_points };
+}
+
 export function parseHandoffItems(text: string): string[] {
   const lines = text
     .split(/\n+/)

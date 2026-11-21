@@ -7,9 +7,10 @@ never depend on this module.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import json
 import os
+import re
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -58,6 +59,22 @@ EXPLAIN_SYSTEM_PROMPT = (
     "'headline' (short plain summary under 12 words), "
     "'explanation' (2 to 3 smooth sentences explaining the lab or preventive finding, why the target range matters at this life stage, and the follow-up step), and "
     "'key_points' (array of 2 to 3 concise plain-text takeaway sentences)."
+)
+
+EXPLAIN_STREAM_SYSTEM_PROMPT = (
+    "You are ReproBridge's assistive clinical-finding explainer. "
+    "You receive ONLY de-identified obligation metadata (never PHI). "
+    "You do NOT diagnose or prescribe; all clinical decisions require clinician sign-off. "
+    "Write in clear, calm, spoken-friendly prose with no markdown fences, asterisks, bolding, or emojis. "
+    "Format your response using EXACTLY these three section markers on their own lines so it can stream live:\n"
+    "HEADLINE:\n"
+    "<short plain summary under 12 words>\n"
+    "EXPLANATION:\n"
+    "<2 to 3 smooth sentences explaining the finding, why the reference target matters at this life stage, and the follow-up step>\n"
+    "KEY_POINTS:\n"
+    "• <concise takeaway 1>\n"
+    "• <concise takeaway 2>\n"
+    "• <concise takeaway 3>"
 )
 
 _EXPLAIN_DISCLAIMER = (
@@ -123,7 +140,9 @@ def _deterministic_fallback(payload: dict[str, Any], reason: str) -> dict[str, A
 
 def _get_model_config() -> tuple[str, list[str]]:
     """Resolve primary model and OpenRouter free fallback chain."""
-    primary = os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL).strip() or DEFAULT_OPENROUTER_MODEL
+    primary = (
+        os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL).strip() or DEFAULT_OPENROUTER_MODEL
+    )
     models = [primary]
     for fb in FREE_FALLBACK_MODELS:
         if fb not in models:
@@ -165,7 +184,9 @@ def synthesize_deidentified_brief(
     primary_model, fallback_chain = _get_model_config()
 
     if not api_key:
-        return _deterministic_fallback(deidentified_payload, reason="OPENROUTER_API_KEY not configured")
+        return _deterministic_fallback(
+            deidentified_payload, reason="OPENROUTER_API_KEY not configured"
+        )
 
     headers = _build_headers(api_key)
     request_body = {
@@ -198,11 +219,15 @@ def synthesize_deidentified_brief(
         summary = str(parsed.get("summary", "")).strip()
         raw_handoff = parsed.get("specialist_handoff", "")
         if isinstance(raw_handoff, list):
-            handoff = "\n".join(f"• {str(item).strip()}" for item in raw_handoff if str(item).strip())
+            handoff = "\n".join(
+                f"• {str(item).strip()}" for item in raw_handoff if str(item).strip()
+            )
         else:
             handoff = str(raw_handoff).strip()
         if not summary or not handoff:
-            return _deterministic_fallback(deidentified_payload, reason="Incomplete JSON fields from OpenRouter")
+            return _deterministic_fallback(
+                deidentified_payload, reason="Incomplete JSON fields from OpenRouter"
+            )
 
         return {
             "mode": "openrouter",
@@ -236,7 +261,9 @@ def stream_deidentified_brief(
     primary_model, fallback_chain = _get_model_config()
 
     if not api_key:
-        fb = _deterministic_fallback(deidentified_payload, reason="OPENROUTER_API_KEY not configured")
+        fb = _deterministic_fallback(
+            deidentified_payload, reason="OPENROUTER_API_KEY not configured"
+        )
         yield {"type": "done", "result": fb}
         return
 
@@ -263,33 +290,39 @@ def stream_deidentified_brief(
     accumulated: list[str] = []
     resolved_model = primary_model
     try:
-        with httpx.Client(timeout=timeout_seconds) as client:
-            with client.stream("POST", OPENROUTER_API_URL, headers=headers, json=request_body) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-                    if chunk.get("model"):
-                        resolved_model = str(chunk["model"])
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = (choices[0].get("delta") or {}).get("content")
-                    if delta:
-                        accumulated.append(delta)
-                        yield {"type": "token", "delta": delta, "model": resolved_model}
+        with (
+            httpx.Client(timeout=timeout_seconds) as client,
+            client.stream(
+                "POST", OPENROUTER_API_URL, headers=headers, json=request_body
+            ) as response,
+        ):
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("model"):
+                    resolved_model = str(chunk["model"])
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0].get("delta") or {}).get("content")
+                if delta:
+                    accumulated.append(delta)
+                    yield {"type": "token", "delta": delta, "model": resolved_model}
 
         full_text = "".join(accumulated).strip()
         summary, handoff = _parse_streamed_sections(full_text)
         if not summary:
-            fb = _deterministic_fallback(deidentified_payload, reason="Empty streamed response from OpenRouter")
+            fb = _deterministic_fallback(
+                deidentified_payload, reason="Empty streamed response from OpenRouter"
+            )
             yield {"type": "done", "result": fb}
             return
 
@@ -403,8 +436,9 @@ def _deterministic_explain_fallback(
     else:
         headline = title[:90] or f"Clinical Follow-up Explanation ({life_stage})"
         explanation = (
-            f"{rationale} " if rationale else ""
-        ) + f"ReproBridge keeps this obligation tracked under {life_stage} care with {owner} until qualifying clinical evidence is verified."
+            (f"{rationale} " if rationale else "")
+            + f"ReproBridge keeps this obligation tracked under {life_stage} care with {owner} until qualifying clinical evidence is verified."
+        )
         key_points = [
             f"Current life stage: {life_stage} (Status: {status}).",
             f"Care coordination owner: {owner}.",
@@ -500,3 +534,142 @@ def explain_deidentified_obligation(
             deidentified_payload,
             reason=f"OpenRouter unavailable ({type(exc).__name__})",
         )
+
+
+def _parse_streamed_explanation(raw_text: str) -> tuple[str, str, list[str]]:
+    """Parse HEADLINE: / EXPLANATION: / KEY_POINTS: sections from streamed text."""
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    markers = list(
+        re.finditer(r"(?:^|\n)\s*(HEADLINE|EXPLANATION|KEY_POINTS)\s*:\s*", text, flags=re.IGNORECASE)
+    )
+    sections: dict[str, str] = {}
+    for idx, match in enumerate(markers):
+        name = match.group(1).upper()
+        start = match.end()
+        end = markers[idx + 1].start() if idx + 1 < len(markers) else len(text)
+        sections[name] = text[start:end].strip()
+
+    headline = " ".join(sections.get("HEADLINE", "").splitlines()).strip()
+    explanation = " ".join(sections.get("EXPLANATION", "").splitlines()).strip()
+    key_points: list[str] = []
+    for line in sections.get("KEY_POINTS", "").splitlines():
+        cleaned = re.sub(r"^\s*(?:[•*-]|\d+[.)])\s*", "", line).strip()
+        if cleaned:
+            key_points.append(cleaned)
+
+    return headline, explanation, key_points[:4]
+
+
+def stream_deidentified_explanation(
+    deidentified_payload: dict[str, Any],
+    *,
+    timeout_seconds: float = 25.0,
+) -> Iterator[dict[str, Any]]:
+    """Stream token deltas from OpenRouter for a single de-identified obligation explanation.
+
+    Yields event dicts:
+      - {"type": "token", "delta": str, "model": str}
+      - {"type": "done", "result": dict[str, Any]}
+    """
+    assert_phi_free(deidentified_payload)
+
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    primary_model, fallback_chain = _get_model_config()
+
+    if not api_key:
+        fb = _deterministic_explain_fallback(
+            deidentified_payload,
+            reason="OPENROUTER_API_KEY not configured",
+        )
+        yield {"type": "done", "result": fb}
+        return
+
+    headers = _build_headers(api_key)
+    request_body = {
+        "model": primary_model,
+        "models": fallback_chain,
+        "temperature": 0.2,
+        "max_tokens": 450,
+        "reasoning": {"effort": "none"},
+        "stream": True,
+        "messages": [
+            {"role": "system", "content": EXPLAIN_STREAM_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Explain this de-identified clinical obligation clearly for clinicians and patients "
+                    f"(0 PHI):\n{json.dumps(deidentified_payload, indent=2)}"
+                ),
+            },
+        ],
+    }
+
+    accumulated: list[str] = []
+    resolved_model = primary_model
+    try:
+        with (
+            httpx.Client(timeout=timeout_seconds) as client,
+            client.stream(
+                "POST", OPENROUTER_API_URL, headers=headers, json=request_body
+            ) as response,
+        ):
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("model"):
+                    resolved_model = str(chunk["model"])
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0].get("delta") or {}).get("content")
+                if delta:
+                    accumulated.append(delta)
+                    yield {"type": "token", "delta": delta, "model": resolved_model}
+
+        full_text = "".join(accumulated).strip()
+        headline, explanation, key_points = _parse_streamed_explanation(full_text)
+        if not headline or not explanation:
+            fb = _deterministic_explain_fallback(
+                deidentified_payload,
+                reason="Incomplete streamed sections from OpenRouter",
+            )
+            yield {"type": "done", "result": fb}
+            return
+
+        yield {
+            "type": "done",
+            "result": {
+                "headline": headline,
+                "explanation": explanation,
+                "key_points": key_points,
+                "disclaimer": _EXPLAIN_DISCLAIMER,
+                "ai_metadata": {
+                    "mode": "openrouter",
+                    "provider": "openrouter",
+                    "model": resolved_model,
+                    "fallback_reason": None,
+                },
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        fb = _deterministic_explain_fallback(
+            deidentified_payload,
+            reason=f"OpenRouter stream unavailable ({type(exc).__name__})",
+        )
+        yield {"type": "done", "result": fb}

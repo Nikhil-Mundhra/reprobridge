@@ -27,9 +27,11 @@ from api.openrouter import (
     DEFAULT_OPENROUTER_MODEL,
     explain_deidentified_obligation,
     stream_deidentified_brief,
+    stream_deidentified_explanation,
 )
 from api.privacy import build_obligation_explain_payload
 from api.workflow import (
+    TransitionState,
     apply_uae_privacy_firewall,
     detect_open_obligations,
     evaluate_life_stage_transition,
@@ -157,12 +159,10 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
-def _stream_transition_events(
-    event_type: str, patient_id: str = "PAT-AE-4092"
-) -> Iterator[str]:
+def _stream_transition_events(event_type: str, patient_id: str = "PAT-AE-4092") -> Iterator[str]:
     """Run deterministic steps first (yielding immediately), then stream OpenRouter tokens."""
     current = list_obligations(patient_id=patient_id)
-    state: dict[str, Any] = {
+    state: TransitionState = {
         "event_type": event_type,
         "obligations": current,
         "reassessed_updates": [],
@@ -174,9 +174,12 @@ def _stream_transition_events(
     }
 
     # Nodes 1-3: Deterministic clinical rules + UAE Privacy Firewall
-    state.update(detect_open_obligations(state))  # type: ignore[arg-type]
-    state.update(evaluate_life_stage_transition(state))  # type: ignore[arg-type]
-    state.update(apply_uae_privacy_firewall(state))  # type: ignore[arg-type]
+    for node in (
+        detect_open_obligations,
+        evaluate_life_stage_transition,
+        apply_uae_privacy_firewall,
+    ):
+        state = {**state, **node(state)}  # LangGraph nodes return partial state dicts
 
     # Persist deterministic obligation updates immediately
     for patch in state["reassessed_updates"]:
@@ -231,7 +234,9 @@ def _stream_transition_events(
     final_trace.append(
         {
             "node": "synthesize_coordination_brief",
-            "execution": "agentic" if synthesis["mode"] == "openrouter" else "deterministic_fallback",
+            "execution": "agentic"
+            if synthesis["mode"] == "openrouter"
+            else "deterministic_fallback",
             "phi_exposed": False,
             "detail": (
                 "Drafted clinician handoff brief via OpenRouter for OB-GYN sign-off."
@@ -326,9 +331,7 @@ def get_obligations(patient_id: str = "PAT-AE-4092"):
     }
 
 
-def _next_obligation_id(
-    existing: list[dict[str, Any]], patient_id: str = "PAT-AE-4092"
-) -> str:
+def _next_obligation_id(existing: list[dict[str, Any]], patient_id: str = "PAT-AE-4092") -> str:
     id_base = int(PATIENT_COHORT_META.get(patient_id, {}).get("id_base", 100))
     nums = []
     for item in existing:
@@ -347,9 +350,7 @@ def import_obligations(body: ObligationImportRequest):
     for item in body.obligations:
         pid = (item.patient_id or target_pid).strip() or target_pid
         patient_name = (item.patient_name or "").strip() or str(
-            PATIENT_COHORT_META.get(pid, {}).get(
-                "patient_name", "Amina Al-Mansoori (Synthetic)"
-            )
+            PATIENT_COHORT_META.get(pid, {}).get("patient_name", "Amina Al-Mansoori (Synthetic)")
         )
         same_patient_existing = [o for o in current + created if o.get("patient_id") == pid]
         obl_id = (item.id or "").strip() or _next_obligation_id(same_patient_existing, pid)
@@ -563,6 +564,65 @@ def explain_obligation(obligation_id: str):
         "privacy_report": privacy_report,
         "audit_events": _filter_audit_events(obls, patient_id),
     }
+
+
+def _stream_obligation_explanation(existing: dict[str, Any]) -> Iterator[str]:
+    """Verify UAE Privacy Firewall first, then stream OpenRouter explanation tokens."""
+    obligation_id = str(existing["id"])
+    privacy_report = build_obligation_explain_payload(existing)
+    yield _sse(
+        "firewall_verified",
+        {
+            "obligation_id": obligation_id,
+            "privacy_report": privacy_report,
+        },
+    )
+
+    result: dict[str, Any] | None = None
+    for chunk in stream_deidentified_explanation(privacy_report["payload"]):
+        if chunk["type"] == "token":
+            yield _sse("token", {"delta": chunk["delta"], "model": chunk["model"]})
+        elif chunk["type"] == "done":
+            result = chunk["result"]
+
+    if result is None:
+        result = explain_deidentified_obligation(privacy_report["payload"])
+
+    append_audit_event(
+        event_type="AI_EXPLANATION_GENERATED",
+        actor=f"AIExplainer ({result['ai_metadata']['model']})",
+        summary=f"Generated de-identified explanation for {obligation_id} (0 PHI transmitted).",
+        obligation_id=obligation_id,
+    )
+    patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
+    obls = list_obligations(patient_id=patient_id)
+    yield _sse(
+        "complete",
+        {
+            "obligation_id": obligation_id,
+            "headline": result["headline"],
+            "explanation": result["explanation"],
+            "key_points": result["key_points"],
+            "disclaimer": result["disclaimer"],
+            "ai_metadata": result["ai_metadata"],
+            "privacy_report": privacy_report,
+            "audit_events": _filter_audit_events(obls, patient_id),
+        },
+    )
+
+
+@app.post("/api/obligations/{obligation_id}/explain/stream")
+def stream_explain_obligation(obligation_id: str) -> StreamingResponse:
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+    return StreamingResponse(
+        _stream_obligation_explanation(existing),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/mcp/tools")

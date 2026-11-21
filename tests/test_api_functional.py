@@ -250,4 +250,14 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
     missing_explain = client.post("/api/obligations/OBL-999/explain")
     assert missing_explain.status_code == 404
 
+    stream_resp = client.post("/api/obligations/OBL-101/explain/stream")
+    assert stream_resp.status_code == 200
+    assert stream_resp.headers["content-type"].startswith("text/event-stream")
+    assert "event: firewall_verified" in stream_resp.text
+    assert "event: complete" in stream_resp.text
+    assert '"phi_check_passed": true' in stream_resp.text
+
+    missing_stream = client.post("/api/obligations/OBL-999/explain/stream")
+    assert missing_stream.status_code == 404
+
     client.post("/api/demo/reset")

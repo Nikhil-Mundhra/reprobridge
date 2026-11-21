@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ClinicalDocumentsDrawer from "./ClinicalDocumentsDrawer";
 import AuditGovernanceSection from "./demo/AuditGovernanceSection";
 import CareFlowAndPatientHeader from "./demo/CareFlowAndPatientHeader";
@@ -37,6 +37,7 @@ export {
   getUrgentDueChip,
   parseDelimitedTable,
   parseHandoffItems,
+  parseStreamedExplanation,
   parseStreamedSections,
 } from "./demo/helpers";
 
@@ -92,10 +93,21 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
   const [explainTarget, setExplainTarget] = useState<Obligation | null>(null);
   const [explainLoading, setExplainLoading] = useState(false);
+  const [explainStreaming, setExplainStreaming] = useState(false);
+  const [explainStreamRaw, setExplainStreamRaw] = useState("");
+  const [explainStreamModel, setExplainStreamModel] = useState<string | null>(null);
+  const [explainStreamTokens, setExplainStreamTokens] = useState(0);
   const [explainError, setExplainError] = useState<string | null>(null);
   const [explainCache, setExplainCache] = useState<Record<string, ObligationExplanationResponse>>(
     {}
   );
+  const explainAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      explainAbortRef.current?.abort();
+    };
+  }, []);
 
   function openClinicalDocuments(docId?: string | null) {
     setDocsInitialId(docId ?? null);
@@ -149,7 +161,14 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setSafetyBlockFeedback({});
     setVerifyTarget(null);
     setShowFhirExportModal(false);
+    explainAbortRef.current?.abort();
+    explainAbortRef.current = null;
     setExplainTarget(null);
+    setExplainLoading(false);
+    setExplainStreaming(false);
+    setExplainStreamRaw("");
+    setExplainStreamModel(null);
+    setExplainStreamTokens(0);
     setExplainError(null);
     setError(null);
     void loadData(patientId);
@@ -161,35 +180,116 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
   async function handleExplainObligation(obl: Obligation, forceRefresh = false) {
     const cacheKey = getExplainCacheKey(obl);
+    explainAbortRef.current?.abort();
+    explainAbortRef.current = null;
+
     setExplainTarget(obl);
     setExplainError(null);
+    setExplainStreamRaw("");
+    setExplainStreamModel(null);
+    setExplainStreamTokens(0);
+
     if (!forceRefresh && explainCache[cacheKey]) {
+      setExplainLoading(false);
+      setExplainStreaming(false);
       return;
     }
 
+    const controller = new AbortController();
+    explainAbortRef.current = controller;
     setExplainLoading(true);
+    setExplainStreaming(true);
+
     try {
-      const res = await fetch(`/api/obligations/${encodeURIComponent(obl.id)}/explain`, {
-        method: "POST",
-      });
-      const body = await res.json().catch(() => ({}));
+      const res = await fetch(
+        `/api/obligations/${encodeURIComponent(obl.id)}/explain/stream`,
+        {
+          method: "POST",
+          headers: { Accept: "text/event-stream" },
+          signal: controller.signal,
+        }
+      );
+
       if (!res.ok) {
-        throw new Error(body.detail || `Explain request failed (HTTP ${res.status})`);
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.detail || `Explain request failed (HTTP ${res.status})`);
       }
-      const explanationData = body as ObligationExplanationResponse;
-      setExplainCache((prev) => ({
-        ...prev,
-        [cacheKey]: explanationData,
-      }));
-      if (Array.isArray(explanationData.audit_events)) {
-        setAuditEvents(explanationData.audit_events);
+
+      const contentType = res.headers.get("Content-Type") ?? "";
+      if (contentType.includes("text/event-stream") && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let accumulated = "";
+
+        const handleEventBlock = (block: string) => {
+          const lines = block.split("\n");
+          let eventName = "message";
+          const dataLines: string[] = [];
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventName = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.slice(5).trim());
+            }
+          }
+          if (dataLines.length === 0) return;
+          const payload = JSON.parse(dataLines.join("\n"));
+
+          if (eventName === "token") {
+            accumulated += payload.delta ?? "";
+            setExplainStreamRaw(accumulated);
+            setExplainStreamTokens((count) => count + 1);
+            if (payload.model) setExplainStreamModel(payload.model);
+          } else if (eventName === "complete") {
+            const explanationData = payload as ObligationExplanationResponse;
+            setExplainCache((prev) => ({
+              ...prev,
+              [cacheKey]: explanationData,
+            }));
+            if (Array.isArray(explanationData.audit_events)) {
+              setAuditEvents(explanationData.audit_events);
+            }
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split("\n\n");
+          buffer = blocks.pop() ?? "";
+          for (const block of blocks) {
+            if (block.trim()) handleEventBlock(block);
+          }
+        }
+        if (buffer.trim()) handleEventBlock(buffer);
+      } else {
+        const explanationData = (await res.json()) as ObligationExplanationResponse;
+        setExplainCache((prev) => ({
+          ...prev,
+          [cacheKey]: explanationData,
+        }));
+        if (Array.isArray(explanationData.audit_events)) {
+          setAuditEvents(explanationData.audit_events);
+        }
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
       setExplainError(
         err instanceof Error ? err.message : "Unable to generate AI explanation."
       );
     } finally {
-      setExplainLoading(false);
+      if (explainAbortRef.current === controller) {
+        explainAbortRef.current = null;
+        setExplainLoading(false);
+        setExplainStreaming(false);
+      }
     }
   }
 
@@ -359,7 +459,14 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setPrivacyReport(null);
     setSafetyBlockFeedback({});
     setShowFhirExportModal(false);
+    explainAbortRef.current?.abort();
+    explainAbortRef.current = null;
     setExplainTarget(null);
+    setExplainLoading(false);
+    setExplainStreaming(false);
+    setExplainStreamRaw("");
+    setExplainStreamModel(null);
+    setExplainStreamTokens(0);
     setExplainError(null);
     setExplainCache({});
     setTrace([]);
@@ -566,11 +673,20 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         obligation={explainTarget}
         data={explainTarget ? explainCache[getExplainCacheKey(explainTarget)] ?? null : null}
         loading={explainLoading}
+        isStreaming={explainStreaming}
+        streamRawText={explainStreamRaw}
+        streamModel={explainStreamModel}
+        streamTokenCount={explainStreamTokens}
         error={explainError}
         onRetry={() => {
           if (explainTarget) void handleExplainObligation(explainTarget, true);
         }}
         onClose={() => {
+          explainAbortRef.current?.abort();
+          explainAbortRef.current = null;
+          setExplainLoading(false);
+          setExplainStreaming(false);
+          setExplainStreamRaw("");
           setExplainTarget(null);
           setExplainError(null);
         }}

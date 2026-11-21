@@ -8,6 +8,7 @@ import {
   Volume2,
   X,
 } from "lucide-react";
+import { parseStreamedExplanation } from "./helpers";
 import {
   formatForSpeech,
   getRankedEnglishVoices,
@@ -19,6 +20,10 @@ interface ObligationExplainerPopoverProps {
   obligation: Obligation | null;
   data: ObligationExplanationResponse | null;
   loading: boolean;
+  isStreaming?: boolean;
+  streamRawText?: string;
+  streamModel?: string | null;
+  streamTokenCount?: number;
   error: string | null;
   onRetry: () => void;
   onClose: () => void;
@@ -52,6 +57,10 @@ export default function ObligationExplainerPopover({
   obligation,
   data,
   loading,
+  isStreaming = false,
+  streamRawText = "",
+  streamModel = null,
+  streamTokenCount = 0,
   error,
   onRetry,
   onClose,
@@ -252,6 +261,19 @@ export default function ObligationExplainerPopover({
   if (!obligation) return null;
 
   const isOpenRouter = data?.ai_metadata?.mode === "openrouter";
+  const parsedStream = isStreaming && !data ? parseStreamedExplanation(streamRawText) : null;
+  const hasStreamContent = Boolean(
+    parsedStream &&
+      (parsedStream.headline ||
+        parsedStream.explanation ||
+        parsedStream.key_points.length > 0)
+  );
+  const streamCaret = (
+    <span
+      aria-hidden="true"
+      className="ml-0.5 inline-block h-3.5 w-1.5 align-middle bg-teal-600 animate-[rb-caret-blink_0.9s_steps(1)_infinite] motion-reduce:animate-none"
+    />
+  );
 
   return (
     <aside
@@ -277,11 +299,20 @@ export default function ObligationExplainerPopover({
                 <ShieldCheck className="h-2.5 w-2.5" aria-hidden="true" />
                 UAE Firewall · 0 PHI
               </span>
-              {data && (
+              {isStreaming && !data ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-1.5 py-0.5 font-mono text-[10px] font-medium text-teal-800">
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-600 motion-reduce:animate-none"
+                  />
+                  Streaming{streamModel ? ` · ${streamModel}` : ""}
+                  {streamTokenCount > 0 ? ` (${streamTokenCount})` : ""}
+                </span>
+              ) : data ? (
                 <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600">
                   {isOpenRouter ? data.ai_metadata.model : "Local Fallback"}
                 </span>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
@@ -298,10 +329,60 @@ export default function ObligationExplainerPopover({
 
       {/* Body */}
       <div className="max-h-[60vh] overflow-y-auto px-4 py-3.5 text-xs">
-        {loading && !data && (
+        {isStreaming && !data && hasStreamContent && parsedStream && (
+          <div className="space-y-3" aria-live="polite">
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-teal-200/70 bg-teal-50/40 px-3 py-2">
+              <button
+                type="button"
+                disabled
+                className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600/60 px-2.5 py-1 text-[11px] font-semibold text-white opacity-80"
+              >
+                <Volume2 className="h-3 w-3" aria-hidden="true" />
+                Streaming…
+              </button>
+              <span className="font-mono text-[10px] text-teal-700">
+                {streamTokenCount > 0 ? `${streamTokenCount} chunks` : "Live tokens"}
+              </span>
+            </div>
+
+            <div>
+              {parsedStream.headline && (
+                <h4 className="text-sm font-semibold text-slate-900">
+                  {parsedStream.headline}
+                  {!parsedStream.explanation && parsedStream.key_points.length === 0 && streamCaret}
+                </h4>
+              )}
+              {parsedStream.explanation && (
+                <p className="mt-1.5 text-[13px] leading-relaxed text-slate-700">
+                  {parsedStream.explanation}
+                  {parsedStream.key_points.length === 0 && streamCaret}
+                </p>
+              )}
+            </div>
+
+            {parsedStream.key_points.length > 0 && (
+              <ul className="space-y-1.5 rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-xs text-slate-700">
+                {parsedStream.key_points.map((pt, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <span
+                      aria-hidden="true"
+                      className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-600"
+                    />
+                    <span className="leading-relaxed">
+                      {pt}
+                      {idx === parsedStream.key_points.length - 1 && streamCaret}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {(loading || isStreaming) && !data && !hasStreamContent && (
           <div className="space-y-2.5 py-1" aria-label="Generating explanation">
             <p className="font-medium text-teal-800">
-              Stripping PHI and synthesizing clear clinical analysis…
+              UAE Firewall verified (0 PHI) · Streaming OpenRouter analysis…
             </p>
             <div className="rb-shimmer h-4 w-3/4 rounded" />
             <div className="rb-shimmer h-3.5 w-full rounded" />

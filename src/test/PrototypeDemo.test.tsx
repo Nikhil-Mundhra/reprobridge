@@ -22,6 +22,7 @@ import PrototypeDemo, {
   getUrgentDueChip,
   parseDelimitedTable,
   parseHandoffItems,
+  parseStreamedExplanation,
   parseStreamedSections,
   type Obligation,
 } from "../PrototypeDemo";
@@ -1211,6 +1212,22 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
       "T S H 4.8 milli-international units per liter (escalated for review).",
       "trimester one target 0.1 to 2.5 for O B G Y N.",
     ]);
+
+    // Partial and complete SSE explanation parsing
+    expect(parseStreamedExplanation("HEADLINE:\nElevated TSH")).toEqual({
+      headline: "Elevated TSH",
+      explanation: "",
+      key_points: [],
+    });
+    expect(
+      parseStreamedExplanation(
+        "HEADLINE:\nElevated TSH\nEXPLANATION:\nAbove target.\nNeeds T4 check.\nKEY_POINTS:\n• Target <2.5\n- Follow OB-GYN"
+      )
+    ).toEqual({
+      headline: "Elevated TSH",
+      explanation: "Above target. Needs T4 check.",
+      key_points: ["Target <2.5", "Follow OB-GYN"],
+    });
   });
 
   it("opens floating AI Clinical Explainer from OBL-101 Explain button, picks Google voice at 1x, chains sentences, and cancels on close", async () => {
@@ -1280,8 +1297,8 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
       if (pathname === "/api/obligations") {
         return createJsonResponse({ patient_id: "PAT-AE-4092", obligations: obls, audit_events: [] });
       }
-      if (pathname === "/api/obligations/OBL-101/explain" && method === "POST") {
-        return createJsonResponse({
+      if (pathname === "/api/obligations/OBL-101/explain/stream" && method === "POST") {
+        const explanationData = {
           obligation_id: "OBL-101",
           headline: "Elevated Thyroid-Stimulating Hormone (Preconception)",
           explanation:
@@ -1300,7 +1317,24 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
             permitted_fields: ["case_token"],
             phi_check_passed: true,
           },
-        });
+        };
+        return createSseResponse([
+          {
+            event: "firewall_verified",
+            data: { obligation_id: "OBL-101", privacy_report: explanationData.privacy_report },
+          },
+          {
+            event: "token",
+            data: {
+              delta: "HEADLINE:\nElevated Thyroid-Stimulating Hormone (Preconception)\nEXPLANATION:\nTSH of 4.8 mIU/L ",
+              model: "google/gemma-4-31b-it:free",
+            },
+          },
+          {
+            event: "complete",
+            data: explanationData,
+          },
+        ]);
       }
       return createJsonResponse({ detail: "Not mocked" }, 404);
     });
