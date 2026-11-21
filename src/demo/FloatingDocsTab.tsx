@@ -29,13 +29,22 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function getViewportSize(): { width: number; height: number } {
+  const docEl = typeof document !== "undefined" ? document.documentElement : null;
+  const fallbackW = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const fallbackH = typeof window !== "undefined" ? window.innerHeight : 800;
+  return {
+    width: docEl && docEl.clientWidth > 0 ? docEl.clientWidth : fallbackW,
+    height: docEl && docEl.clientHeight > 0 ? docEl.clientHeight : fallbackH,
+  };
+}
+
 function computeDockedPosition(
   dock: DockState,
   width: number,
   height: number
 ): { left: number; top: number } {
-  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1280;
-  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 800;
+  const { width: viewportWidth, height: viewportHeight } = getViewportSize();
 
   const maxLeft = Math.max(0, viewportWidth - width);
   const left = dock.side === "left" ? 0 : maxLeft;
@@ -120,7 +129,19 @@ export default function FloatingDocsTab({
       }
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+
+    const observer =
+      typeof ResizeObserver !== "undefined" && document.documentElement
+        ? new ResizeObserver(onResize)
+        : null;
+    if (observer && document.documentElement) {
+      observer.observe(document.documentElement);
+    }
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      observer?.disconnect();
+    };
   }, [dock, syncDockedPosition]);
 
   function handlePointerDown(e: React.PointerEvent<HTMLButtonElement>) {
@@ -163,10 +184,11 @@ export default function FloatingDocsTab({
       setIsDragging(true);
     }
 
-    const maxLeft = Math.max(0, window.innerWidth - session.width);
+    const { width: viewportWidth, height: viewportHeight } = getViewportSize();
+    const maxLeft = Math.max(0, viewportWidth - session.width);
     const maxTop = Math.max(
       TOP_SAFE_MARGIN,
-      window.innerHeight - session.height - BOTTOM_SAFE_MARGIN
+      viewportHeight - session.height - BOTTOM_SAFE_MARGIN
     );
     const nextLeft = clamp(session.originLeft + dx, 0, maxLeft);
     const nextTop = clamp(session.originTop + dy, TOP_SAFE_MARGIN, maxTop);
@@ -189,11 +211,12 @@ export default function FloatingDocsTab({
 
     if (session.didDrag) {
       suppressClickRef.current = true;
+      const { width: viewportWidth, height: viewportHeight } = getViewportSize();
       const centerX = session.lastLeft + session.width / 2;
-      const nextSide: DocsDockSide = centerX < window.innerWidth / 2 ? "left" : "right";
+      const nextSide: DocsDockSide = centerX < viewportWidth / 2 ? "left" : "right";
       const maxTop = Math.max(
         TOP_SAFE_MARGIN,
-        window.innerHeight - session.height - BOTTOM_SAFE_MARGIN
+        viewportHeight - session.height - BOTTOM_SAFE_MARGIN
       );
       const span = maxTop - TOP_SAFE_MARGIN;
       const nextYRatio =

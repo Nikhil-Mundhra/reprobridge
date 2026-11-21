@@ -892,6 +892,27 @@ describe("<FloatingDocsTab /> & <ClinicalDocumentsDrawer /> directional docking 
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it("docks flush against documentElement.clientWidth on the right so a vertical scrollbar never obscures it", () => {
+    const prevDescriptor = Object.getOwnPropertyDescriptor(document.documentElement, "clientWidth");
+    Object.defineProperty(document.documentElement, "clientWidth", {
+      configurable: true,
+      get: () => 1008,
+    });
+
+    try {
+      render(<FloatingDocsTab count={5} onOpen={vi.fn()} />);
+      const tab = screen.getByRole("button", { name: /Open Clinical Source Documents/i });
+      // Default fallback tab width is 44px -> 1008 - 44 = 964px (not window.innerWidth 1024 - 44 = 980px)
+      expect(tab.style.left).toBe("964px");
+    } finally {
+      if (prevDescriptor) {
+        Object.defineProperty(document.documentElement, "clientWidth", prevDescriptor);
+      } else {
+        delete (document.documentElement as unknown as { clientWidth?: number }).clientWidth;
+      }
+    }
+  });
+
   it("snaps flush to the left edge after dragging across screen, persists session cookie, and suppresses trailing click", () => {
     const onOpen = vi.fn();
     const onDockChange = vi.fn();
