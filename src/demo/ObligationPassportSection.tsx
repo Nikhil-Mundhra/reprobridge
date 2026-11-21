@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { getDefaultDocIdForObligation } from "../ClinicalDocumentsDrawer";
+import ClinicalMetricVisualizer from "./ClinicalMetricVisualizer";
 import {
   PRIORITY_STYLES,
   STATUS_STYLES,
@@ -206,6 +207,8 @@ export default function ObligationPassportSection({
             )}
 
             <p className="mt-3 text-sm leading-relaxed text-slate-600">{obl.rationale}</p>
+
+            <ClinicalMetricVisualizer obligation={obl} />
 
             <dl className="mt-4 grid gap-2 border-t border-slate-100 pt-3 text-xs text-slate-500 sm:grid-cols-3">
               <div>

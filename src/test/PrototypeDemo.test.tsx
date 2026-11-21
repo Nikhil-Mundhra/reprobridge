@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ClinicalDocumentsDrawer from "../ClinicalDocumentsDrawer";
+import ClinicalMetricVisualizer, { extractClinicalMetrics } from "../demo/ClinicalMetricVisualizer";
 import FloatingDocsTab from "../demo/FloatingDocsTab";
 import {
   clearDocsSessionPrefs,
@@ -1029,5 +1030,84 @@ describe("<FloatingDocsTab /> & <ClinicalDocumentsDrawer /> directional docking 
 
     expect(dialog.style.getPropertyValue("--rb-drawer-width")).toBe("792px");
     expect(readDocsSessionPrefs().drawerWidth).toBe(792);
+  });
+});
+
+describe("<ClinicalMetricVisualizer /> clinical range bars", () => {
+  it("visualizes TSH 4.8 mIU/L with life-stage target shifting and VERIFIED_CLOSED normalization", () => {
+    const tshObl = makeSeedObligations()[0];
+    const { rerender } = render(<ClinicalMetricVisualizer obligation={tshObl} />);
+
+    const meter = screen.getByRole("meter");
+    expect(meter).toHaveAttribute("aria-valuenow", "4.8");
+    expect(screen.getByText("HIGH")).toBeInTheDocument();
+    expect(screen.getByText("Ref: 0.4–4.0 mIU/L")).toBeInTheDocument();
+
+    // Pregnancy transition tightens target to T1 0.1–2.5 mIU/L
+    rerender(
+      <ClinicalMetricVisualizer
+        obligation={{ ...tshObl, life_stage: "Antenatal (Trimester 1)", status: "ESCALATED_FOR_REVIEW" }}
+      />
+    );
+    expect(screen.getByText("T1 Target: 0.1–2.5 mIU/L")).toBeInTheDocument();
+    expect(screen.getByText("T1 target <2.5")).toBeInTheDocument();
+
+    // Clinician verified closure updates meter value to 2.1 and NORMALIZED badge
+    rerender(
+      <ClinicalMetricVisualizer
+        obligation={{
+          ...tshObl,
+          life_stage: "Antenatal (Trimester 1)",
+          status: "VERIFIED_CLOSED",
+          verified_by: "Dr. Layla Al-Hashimi (OB-GYN)",
+          closure_evidence: "Repeat TSH 2.1 mIU/L normalized after levothyroxine titration.",
+        }}
+      />
+    );
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuenow", "2.1");
+    expect(screen.getByText("NORMALIZED")).toBeInTheDocument();
+  });
+
+  it("extracts and renders multiple metrics for dysglycemia, preeclampsia BP, and imported Ferritin", () => {
+    const dysglycemiaObl = makeFatimaObligations()[0];
+    expect(extractClinicalMetrics(dysglycemiaObl)).toHaveLength(2);
+
+    const { rerender } = render(<ClinicalMetricVisualizer obligation={dysglycemiaObl} />);
+    const glucoseMeters = screen.getAllByRole("meter");
+    expect(glucoseMeters).toHaveLength(2);
+    expect(glucoseMeters[0]).toHaveAttribute("aria-valuenow", "112");
+    expect(glucoseMeters[1]).toHaveAttribute("aria-valuenow", "6.1");
+
+    const bpObl: Obligation = {
+      id: "OBL-301",
+      patient_id: "PAT-AE-6304",
+      patient_name: "Sara Al-Nuaimi (Synthetic)",
+      life_stage: "Preconception",
+      title: "Preeclampsia Low-Dose Aspirin Prophylaxis Window (BP 138/88 mmHg)",
+      rationale: "History of prior preterm preeclampsia and baseline BP 138/88 mmHg.",
+      evidence_source: "FHIR Observation/obs-bp-2026-09 (Malaffi HIE Synthetic)",
+      rule_version: "RB-PREECLAMPSIA-v1.3.0",
+      owner: "Primary Care / Maternal-Fetal Medicine",
+      status: "OPEN",
+      priority: "HIGH",
+      verified_by: null,
+      closure_evidence: null,
+    };
+    rerender(<ClinicalMetricVisualizer obligation={bpObl} />);
+    const bpMeters = screen.getAllByRole("meter");
+    expect(bpMeters).toHaveLength(2);
+    expect(bpMeters[0]).toHaveAttribute("aria-valuenow", "138");
+    expect(bpMeters[1]).toHaveAttribute("aria-valuenow", "88");
+
+    const ferritinObl: Obligation = {
+      ...bpObl,
+      id: "OBL-303",
+      rule_version: "RB-CUSTOM-v1.0.0",
+      title: "Iron Deficiency Anemia Ferritin Check",
+      rationale: "Preconception ferritin 11 ng/mL; requires oral iron supplementation.",
+    };
+    rerender(<ClinicalMetricVisualizer obligation={ferritinObl} />);
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuenow", "11");
+    expect(screen.getByText("LOW")).toBeInTheDocument();
   });
 });
