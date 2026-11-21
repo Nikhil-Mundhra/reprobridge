@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "skills": {
+    "pretty-mermaid": {
+      "source": "imxv/Pretty-mermaid-skills",
+      "commit": "e234ab73c2992f03c36db04fd55ebb90abca9c45",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "b0bb06f991966f61828c1a485be5305aa7f44cc30e95afed26eefbae37e588da"
+    }
+  }
+}
