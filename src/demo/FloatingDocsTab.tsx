@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FileText } from "lucide-react";
-
-type DockSide = "left" | "right";
+import {
+  readDocsSessionPrefs,
+  writeDocsSessionPrefs,
+  type DocsDockSide,
+} from "./docsSessionPrefs";
 
 interface DockState {
-  side: DockSide;
+  side: DocsDockSide;
   yRatio: number;
 }
 
 interface FloatingDocsTabProps {
   count: number;
   onOpen: () => void;
+  initialSide?: DocsDockSide;
+  initialYRatio?: number;
+  onDockChange?: (side: DocsDockSide, yRatio: number) => void;
 }
 
-const STORAGE_KEY = "reprobridge:floating-docs-tab-v1";
 const TOP_SAFE_MARGIN = 64;
 const BOTTOM_SAFE_MARGIN = 16;
 const DRAG_THRESHOLD_PX = 5;
@@ -22,30 +27,6 @@ const DEFAULT_HEIGHT = 176;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function loadSavedDock(): DockState {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { side: "right", yRatio: 0.5 };
-    const parsed = JSON.parse(raw) as Partial<DockState>;
-    const side: DockSide = parsed.side === "left" ? "left" : "right";
-    const yRatio =
-      typeof parsed.yRatio === "number" && Number.isFinite(parsed.yRatio)
-        ? clamp(parsed.yRatio, 0, 1)
-        : 0.5;
-    return { side, yRatio };
-  } catch {
-    return { side: "right", yRatio: 0.5 };
-  }
-}
-
-function saveDock(dock: DockState): void {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(dock));
-  } catch {
-    // Ignore storage quota or privacy-mode errors
-  }
 }
 
 function computeDockedPosition(
@@ -71,7 +52,13 @@ function computeDockedPosition(
   };
 }
 
-export default function FloatingDocsTab({ count, onOpen }: FloatingDocsTabProps) {
+export default function FloatingDocsTab({
+  count,
+  onOpen,
+  initialSide,
+  initialYRatio,
+  onDockChange,
+}: FloatingDocsTabProps) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const suppressClickRef = useRef(false);
   const dragRef = useRef<{
@@ -87,11 +74,22 @@ export default function FloatingDocsTab({ count, onOpen }: FloatingDocsTabProps)
     didDrag: boolean;
   } | null>(null);
 
-  const [dock, setDock] = useState<DockState>(() => loadSavedDock());
+  const [dock, setDock] = useState<DockState>(() => {
+    const saved = readDocsSessionPrefs();
+    return {
+      side: initialSide ?? saved.side,
+      yRatio: initialYRatio ?? saved.yRatio,
+    };
+  });
   const [isDragging, setIsDragging] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number }>(() =>
-    computeDockedPosition(loadSavedDock(), DEFAULT_WIDTH, DEFAULT_HEIGHT)
-  );
+  const [pos, setPos] = useState<{ left: number; top: number }>(() => {
+    const saved = readDocsSessionPrefs();
+    return computeDockedPosition(
+      { side: initialSide ?? saved.side, yRatio: initialYRatio ?? saved.yRatio },
+      DEFAULT_WIDTH,
+      DEFAULT_HEIGHT
+    );
+  });
 
   const measureDimensions = useCallback(() => {
     const rect = buttonRef.current?.getBoundingClientRect();
@@ -166,7 +164,10 @@ export default function FloatingDocsTab({ count, onOpen }: FloatingDocsTabProps)
     }
 
     const maxLeft = Math.max(0, window.innerWidth - session.width);
-    const maxTop = Math.max(TOP_SAFE_MARGIN, window.innerHeight - session.height - BOTTOM_SAFE_MARGIN);
+    const maxTop = Math.max(
+      TOP_SAFE_MARGIN,
+      window.innerHeight - session.height - BOTTOM_SAFE_MARGIN
+    );
     const nextLeft = clamp(session.originLeft + dx, 0, maxLeft);
     const nextTop = clamp(session.originTop + dy, TOP_SAFE_MARGIN, maxTop);
 
@@ -189,16 +190,21 @@ export default function FloatingDocsTab({ count, onOpen }: FloatingDocsTabProps)
     if (session.didDrag) {
       suppressClickRef.current = true;
       const centerX = session.lastLeft + session.width / 2;
-      const nextSide: DockSide = centerX < window.innerWidth / 2 ? "left" : "right";
-      const maxTop = Math.max(TOP_SAFE_MARGIN, window.innerHeight - session.height - BOTTOM_SAFE_MARGIN);
+      const nextSide: DocsDockSide = centerX < window.innerWidth / 2 ? "left" : "right";
+      const maxTop = Math.max(
+        TOP_SAFE_MARGIN,
+        window.innerHeight - session.height - BOTTOM_SAFE_MARGIN
+      );
       const span = maxTop - TOP_SAFE_MARGIN;
-      const nextYRatio = span > 0 ? clamp((session.lastTop - TOP_SAFE_MARGIN) / span, 0, 1) : 0.5;
+      const nextYRatio =
+        span > 0 ? clamp((session.lastTop - TOP_SAFE_MARGIN) / span, 0, 1) : 0.5;
       const nextDock: DockState = { side: nextSide, yRatio: nextYRatio };
 
-      saveDock(nextDock);
+      writeDocsSessionPrefs({ side: nextSide, yRatio: nextYRatio });
       setDock(nextDock);
       setPos(computeDockedPosition(nextDock, session.width, session.height));
       setIsDragging(false);
+      onDockChange?.(nextSide, nextYRatio);
     } else {
       setIsDragging(false);
     }
@@ -215,11 +221,12 @@ export default function FloatingDocsTab({ count, onOpen }: FloatingDocsTabProps)
   function handleKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
-      const nextSide: DockSide = e.key === "ArrowLeft" ? "left" : "right";
+      const nextSide: DocsDockSide = e.key === "ArrowLeft" ? "left" : "right";
       const nextDock: DockState = { side: nextSide, yRatio: dock.yRatio };
-      saveDock(nextDock);
+      writeDocsSessionPrefs({ side: nextSide, yRatio: dock.yRatio });
       setDock(nextDock);
       syncDockedPosition(nextDock);
+      onDockChange?.(nextSide, dock.yRatio);
     }
   }
 

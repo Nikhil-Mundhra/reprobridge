@@ -162,12 +162,13 @@ progress.rb-spinner:indeterminate {
   }
 }
 
-/* Native <dialog> right-side Clinical Documents drawer (modern-web-guidance: dialog + prevent-page-scroll + animate-to-from-top-layer) */
+/* Native <dialog> edge-docked Clinical Documents drawer (modern-web-guidance: dialog + prevent-page-scroll + animate-to-from-top-layer) */
 dialog.rb-doc-drawer {
+  --rb-drawer-offset: 36px;
   margin: 0 0 0 auto;
   padding: 0;
   border: 0;
-  width: min(1080px, 96vw);
+  width: min(var(--rb-drawer-width, 1080px), 96vw);
   max-width: 100vw;
   height: 100dvh;
   max-height: 100dvh;
@@ -180,8 +181,13 @@ dialog.rb-doc-drawer {
   transition-behavior: allow-discrete;
 
   @media (prefers-reduced-motion: no-preference) {
-    transform: translateX(36px);
+    transform: translateX(var(--rb-drawer-offset));
   }
+}
+
+dialog.rb-doc-drawer[data-side="left"] {
+  --rb-drawer-offset: -36px;
+  margin: 0 auto 0 0;
 }
 
 dialog.rb-doc-drawer[open] {
@@ -200,7 +206,7 @@ dialog.rb-doc-drawer[open] {
     transform: translateX(0);
 
     @starting-style {
-      transform: translateX(36px);
+      transform: translateX(var(--rb-drawer-offset));
     }
   }
 

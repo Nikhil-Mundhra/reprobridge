@@ -11,6 +11,7 @@ import OrchestratorHarnessSection from "./demo/OrchestratorHarnessSection";
 import PatientCohortBar from "./demo/PatientCohortBar";
 import VerifyClosureModal from "./demo/VerifyClosureModal";
 import { DEFAULT_PATIENT_COHORT } from "./demo/constants";
+import { readDocsSessionPrefs, type DocsSessionPrefs } from "./demo/docsSessionPrefs";
 import { parseStreamedSections } from "./demo/helpers";
 import type {
   AiMetadata,
@@ -85,6 +86,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
   const [docsDrawerOpen, setDocsDrawerOpen] = useState(false);
   const [docsInitialId, setDocsInitialId] = useState<string | null>(null);
+  const [docsPrefs, setDocsPrefs] = useState<DocsSessionPrefs>(() => readDocsSessionPrefs());
 
   function openClinicalDocuments(docId?: string | null) {
     setDocsInitialId(docId ?? null);
@@ -495,6 +497,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
       {/* Draggable Edge-Snapping Tab for Clinician Source Documents */}
       <FloatingDocsTab
         count={totalClinicalDocCount}
+        initialSide={docsPrefs.side}
+        initialYRatio={docsPrefs.yRatio}
+        onDockChange={(side, yRatio) =>
+          setDocsPrefs((prev) => ({ ...prev, side, yRatio }))
+        }
         onOpen={() => openClinicalDocuments()}
       />
 
@@ -507,6 +514,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         obligations={obligations}
         patientId={selectedPatientId}
         clinicianLabel={clinicianName}
+        side={docsPrefs.side}
+        drawerWidth={docsPrefs.drawerWidth}
+        onDrawerWidthChange={(drawerWidth) =>
+          setDocsPrefs((prev) => ({ ...prev, drawerWidth }))
+        }
       />
     </div>
   );

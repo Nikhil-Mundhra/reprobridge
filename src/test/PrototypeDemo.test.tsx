@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ClinicalDocumentsDrawer from "../ClinicalDocumentsDrawer";
 import FloatingDocsTab from "../demo/FloatingDocsTab";
+import {
+  clearDocsSessionPrefs,
+  DOCS_PREFS_COOKIE,
+  readDocsSessionPrefs,
+} from "../demo/docsSessionPrefs";
 import PrototypeDemo, {
   SAMPLE_IMPORT_CSV,
   buildOutboundFhirBundle,
@@ -642,6 +648,7 @@ describe("<PrototypeDemo /> component workflows", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    clearDocsSessionPrefs();
   });
 
   it("renders initial patient passport, compact navbar controls, and invokes onBackToTutorial", async () => {
@@ -859,15 +866,14 @@ describe("<PrototypeDemo /> component workflows", () => {
   });
 });
 
-describe("<FloatingDocsTab /> draggable edge snapping", () => {
-  const STORAGE_KEY = "reprobridge:floating-docs-tab-v1";
-
+describe("<FloatingDocsTab /> & <ClinicalDocumentsDrawer /> directional docking and session cookies", () => {
   beforeEach(() => {
-    window.localStorage.removeItem(STORAGE_KEY);
+    clearDocsSessionPrefs();
   });
 
   afterEach(() => {
-    window.localStorage.removeItem(STORAGE_KEY);
+    clearDocsSessionPrefs();
+    vi.restoreAllMocks();
   });
 
   it("renders docked right by default and invokes onOpen on click", async () => {
@@ -885,9 +891,10 @@ describe("<FloatingDocsTab /> draggable edge snapping", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("snaps flush to the left edge after dragging across screen, persists dock state, and suppresses trailing click", () => {
+  it("snaps flush to the left edge after dragging across screen, persists session cookie, and suppresses trailing click", () => {
     const onOpen = vi.fn();
-    render(<FloatingDocsTab count={5} onOpen={onOpen} />);
+    const onDockChange = vi.fn();
+    render(<FloatingDocsTab count={5} onOpen={onOpen} onDockChange={onDockChange} />);
     const tab = screen.getByRole("button", { name: /Open Clinical Source Documents/i });
 
     const startX = window.innerWidth - 20;
@@ -906,10 +913,9 @@ describe("<FloatingDocsTab /> draggable edge snapping", () => {
     fireEvent.click(tab);
     expect(onOpen).not.toHaveBeenCalled();
 
-    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as {
-      side?: string;
-    };
-    expect(saved.side).toBe("left");
+    expect(onDockChange).toHaveBeenCalledWith("left", expect.any(Number));
+    expect(document.cookie).toContain(DOCS_PREFS_COOKIE);
+    expect(readDocsSessionPrefs().side).toBe("left");
   });
 
   it("snaps between left and right edges via ArrowLeft and ArrowRight keyboard navigation", () => {
@@ -919,9 +925,109 @@ describe("<FloatingDocsTab /> draggable edge snapping", () => {
     fireEvent.keyDown(tab, { key: "ArrowLeft" });
     expect(tab).toHaveAttribute("data-dock-side", "left");
     expect(tab.className).toContain("rounded-r-xl");
+    expect(readDocsSessionPrefs().side).toBe("left");
 
     fireEvent.keyDown(tab, { key: "ArrowRight" });
     expect(tab).toHaveAttribute("data-dock-side", "right");
     expect(tab.className).toContain("rounded-l-xl");
+    expect(readDocsSessionPrefs().side).toBe("right");
+  });
+
+  it("opens ClinicalDocumentsDrawer from the docked left edge after dragging FloatingDocsTab to left", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const pathname = new URL(url, "http://localhost").pathname;
+      if (pathname === "/api/health") {
+        return createJsonResponse({
+          status: "ok",
+          residency_policy: "UAE_PHI_LOCAL_ONLY",
+          ai_provider: { provider: "openrouter", configured: true, model: "google/gemma-4-31b-it:free" },
+          database: { provider: "neon-postgres", connected: true, branch: "main", pooled: true, detail: "Connected" },
+        });
+      }
+      if (pathname === "/api/obligations") {
+        return createJsonResponse({
+          patient_id: "PAT-AE-4092",
+          obligations: makeSeedObligations(),
+          audit_events: [],
+        });
+      }
+      return createJsonResponse({ detail: "Not mocked" }, 404);
+    });
+
+    render(<PrototypeDemo onBackToTutorial={vi.fn()} />);
+    await screen.findByText("Clinical Obligation Passport (2)");
+
+    const tab = screen.getByRole("button", { name: /Open Clinical Source Documents \(5 synthetic records\)/i });
+    fireEvent.keyDown(tab, { key: "ArrowLeft" });
+    expect(tab).toHaveAttribute("data-dock-side", "left");
+
+    await user.click(tab);
+    const docsDialog = await screen.findByRole("dialog", { name: /Clinical Source Documents/i });
+    expect(docsDialog).toHaveAttribute("data-side", "left");
+  });
+
+  it("resizes ClinicalDocumentsDrawer width via edge drag and keyboard on both sides and persists in session cookie", () => {
+    const onWidthChange = vi.fn();
+    const { rerender } = render(
+      <ClinicalDocumentsDrawer
+        isOpen={true}
+        onClose={vi.fn()}
+        currentLifeStage="Preconception"
+        obligations={makeSeedObligations()}
+        side="right"
+        drawerWidth={720}
+        onDrawerWidthChange={onWidthChange}
+      />
+    );
+
+    const dialog = screen.getByRole("dialog", { name: /Clinical Source Documents/i });
+    expect(dialog).toHaveAttribute("data-side", "right");
+    expect(dialog.style.getPropertyValue("--rb-drawer-width")).toBe("720px");
+
+    const separator = within(dialog).getByRole("separator", {
+      name: /Resize Clinical Documents drawer width/i,
+    });
+    expect(separator.className).toContain("left-0");
+
+    // Drag left edge further left by 100px -> widens right-docked drawer from 720 to 820
+    fireEvent.pointerDown(separator, { button: 0, pointerId: 1, clientX: 300 });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientX: 200 });
+    fireEvent.pointerUp(separator, { pointerId: 1, clientX: 200 });
+
+    expect(dialog.style.getPropertyValue("--rb-drawer-width")).toBe("820px");
+    expect(onWidthChange).toHaveBeenLastCalledWith(820);
+    expect(readDocsSessionPrefs().drawerWidth).toBe(820);
+
+    // Rerender docked on left edge with controlled drawerWidth update: separator flips to right-0 and ArrowRight widens (+32px)
+    rerender(
+      <ClinicalDocumentsDrawer
+        isOpen={true}
+        onClose={vi.fn()}
+        currentLifeStage="Preconception"
+        obligations={makeSeedObligations()}
+        side="left"
+        drawerWidth={700}
+        onDrawerWidthChange={onWidthChange}
+      />
+    );
+
+    expect(dialog).toHaveAttribute("data-side", "left");
+    expect(separator.className).toContain("right-0");
+    expect(dialog.style.getPropertyValue("--rb-drawer-width")).toBe("700px");
+
+    fireEvent.keyDown(separator, { key: "ArrowRight" });
+    expect(dialog.style.getPropertyValue("--rb-drawer-width")).toBe("732px");
+    expect(onWidthChange).toHaveBeenLastCalledWith(732);
+    expect(readDocsSessionPrefs().drawerWidth).toBe(732);
+
+    // Drag right edge further right by 60px -> widens left-docked drawer from 732 to 792
+    fireEvent.pointerDown(separator, { button: 0, pointerId: 2, clientX: 732 });
+    fireEvent.pointerMove(separator, { pointerId: 2, clientX: 792 });
+    fireEvent.pointerUp(separator, { pointerId: 2, clientX: 792 });
+
+    expect(dialog.style.getPropertyValue("--rb-drawer-width")).toBe("792px");
+    expect(readDocsSessionPrefs().drawerWidth).toBe(792);
   });
 });

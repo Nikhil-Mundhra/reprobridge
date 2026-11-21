@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Building2,
   CheckCircle2,
@@ -14,6 +14,15 @@ import {
   X,
 } from "lucide-react";
 import { handleSpatialKeyDown } from "./spatialNav";
+import {
+  clampDrawerWidth,
+  DEFAULT_DRAWER_WIDTH,
+  getMaxDrawerWidth,
+  MIN_DRAWER_WIDTH,
+  readDocsSessionPrefs,
+  writeDocsSessionPrefs,
+  type DocsDockSide,
+} from "./demo/docsSessionPrefs";
 
 export interface DrawerObligationSummary {
   id: string;
@@ -39,6 +48,9 @@ interface ClinicalDocumentsDrawerProps {
   obligations: DrawerObligationSummary[];
   patientId?: string;
   clinicianLabel?: string;
+  side?: DocsDockSide;
+  drawerWidth?: number;
+  onDrawerWidthChange?: (width: number) => void;
 }
 
 type DocCategory = "lab" | "serology" | "ob_note" | "immunization" | "imported";
@@ -1134,17 +1146,46 @@ export default function ClinicalDocumentsDrawer({
   obligations,
   patientId: propPatientId,
   clinicianLabel = "Dr. Layla Al-Hashimi, MD (OB-GYN)",
+  side = "right",
+  drawerWidth: propDrawerWidth,
+  onDrawerWidthChange,
 }: ClinicalDocumentsDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = useId();
   const tableCaptionId = useId();
+  const resizeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    lastWidth: number;
+  } | null>(null);
 
   const activePatientId = propPatientId ?? obligations[0]?.patient_id ?? "PAT-AE-4092";
   const patientPack = PATIENT_DOC_PACKS[activePatientId] ?? BASE_CLINICAL_DOCUMENTS;
 
+  const [width, setWidth] = useState<number>(() =>
+    clampDrawerWidth(propDrawerWidth ?? readDocsSessionPrefs().drawerWidth)
+  );
+  const [isResizing, setIsResizing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [stageFilter, setStageFilter] = useState<"ALL" | "Preconception" | "Antenatal" | "Postpartum">("ALL");
   const [selectedDocId, setSelectedDocId] = useState<string>(patientPack[0]?.id ?? "DOC-LAB-01");
+
+  useEffect(() => {
+    if (typeof propDrawerWidth === "number" && !resizeRef.current) {
+      setWidth(clampDrawerWidth(propDrawerWidth));
+    }
+  }, [propDrawerWidth]);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (!resizeRef.current) {
+        setWidth((prev) => clampDrawerWidth(prev));
+      }
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // Reset selected doc when switching active patient unless initialDocId was targeted
   useEffect(() => {
@@ -1335,14 +1376,113 @@ export default function ClinicalDocumentsDrawer({
     }, 1500);
   }
 
+  function handleResizePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    resizeRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startWidth: width,
+      lastWidth: width,
+    };
+    setIsResizing(true);
+    try {
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    } catch {
+      // Ignore synthetic events where pointer capture is unavailable
+    }
+  }
+
+  function handleResizePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const session = resizeRef.current;
+    if (!session || session.pointerId !== e.pointerId) return;
+    const dx = e.clientX - session.startX;
+    const nextWidth = clampDrawerWidth(
+      side === "left" ? session.startWidth + dx : session.startWidth - dx
+    );
+    session.lastWidth = nextWidth;
+    setWidth(nextWidth);
+  }
+
+  function finishResize(e: React.PointerEvent<HTMLDivElement>) {
+    const session = resizeRef.current;
+    if (!session || session.pointerId !== e.pointerId) return;
+    resizeRef.current = null;
+    setIsResizing(false);
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // Ignore synthetic events where pointer capture was not held
+    }
+    const finalWidth = clampDrawerWidth(session.lastWidth);
+    writeDocsSessionPrefs({ drawerWidth: finalWidth });
+    onDrawerWidthChange?.(finalWidth);
+  }
+
+  function handleResizeKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const step = 32;
+    let nextWidth: number | null = null;
+    if (e.key === "ArrowLeft") {
+      nextWidth = clampDrawerWidth(side === "left" ? width - step : width + step);
+    } else if (e.key === "ArrowRight") {
+      nextWidth = clampDrawerWidth(side === "left" ? width + step : width - step);
+    }
+    if (nextWidth !== null) {
+      e.preventDefault();
+      setWidth(nextWidth);
+      writeDocsSessionPrefs({ drawerWidth: nextWidth });
+      onDrawerWidthChange?.(nextWidth);
+    }
+  }
+
+  function handleResizeDoubleClick() {
+    const resetWidth = clampDrawerWidth(DEFAULT_DRAWER_WIDTH);
+    setWidth(resetWidth);
+    writeDocsSessionPrefs({ drawerWidth: resetWidth });
+    onDrawerWidthChange?.(resetWidth);
+  }
+
   return (
     <dialog
       ref={dialogRef}
       aria-labelledby={titleId}
+      data-side={side}
+      data-resizing={isResizing ? "true" : "false"}
+      style={{ "--rb-drawer-width": `${width}px` } as CSSProperties}
       className="rb-doc-drawer"
       {...({ closedby: "any" } as Record<string, string>)}
     >
-      <div className="flex h-full flex-col overflow-hidden bg-slate-100 text-slate-900 shadow-2xl">
+      <div className="relative flex h-full flex-col overflow-hidden bg-slate-100 text-slate-900 shadow-2xl">
+        {/* Draggable Width Resize Handle */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          tabIndex={0}
+          aria-label="Resize Clinical Documents drawer width"
+          aria-valuemin={MIN_DRAWER_WIDTH}
+          aria-valuemax={getMaxDrawerWidth()}
+          aria-valuenow={width}
+          title="Drag edge to resize width · Double-click to reset"
+          onPointerDown={handleResizePointerDown}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={finishResize}
+          onPointerCancel={finishResize}
+          onKeyDown={handleResizeKeyDown}
+          onDoubleClick={handleResizeDoubleClick}
+          className={`group absolute inset-y-0 z-20 flex w-2.5 touch-none cursor-ew-resize items-center justify-center focus:outline-none focus-visible:bg-teal-500/20 ${
+            side === "left" ? "right-0" : "left-0"
+          }`}
+        >
+          <span
+            aria-hidden="true"
+            className={`h-12 w-1 rounded-full transition-colors ${
+              isResizing
+                ? "bg-teal-600"
+                : "bg-slate-300/80 group-hover:bg-teal-500 group-focus-visible:bg-teal-600"
+            }`}
+          />
+        </div>
+
         {/* Top Clinician Viewer Bar */}
         <header className="shrink-0 border-b border-slate-200 bg-white px-5 py-3.5">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1390,9 +1530,17 @@ export default function ClinicalDocumentsDrawer({
         </header>
 
         {/* Main 2-Pane Document Workspace */}
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[310px_minmax(0,1fr)]">
+        <div
+          className={`grid min-h-0 flex-1 ${
+            width >= 760 ? "grid-cols-[310px_minmax(0,1fr)]" : "grid-cols-1"
+          }`}
+        >
           {/* Left Rail: Search + Filter + Document List */}
-          <aside className="flex min-h-0 flex-col border-b border-slate-200 bg-slate-50 lg:border-b-0 lg:border-r">
+          <aside
+            className={`flex min-h-0 flex-col bg-slate-50 ${
+              width >= 760 ? "border-r border-slate-200" : "border-b border-slate-200"
+            }`}
+          >
             <div className="shrink-0 space-y-2.5 border-b border-slate-200 bg-white p-3.5">
               <label className="relative block">
                 <span className="sr-only">Search clinical documents by lab, LOINC, or facility</span>
