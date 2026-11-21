@@ -1,6 +1,7 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import FloatingDocsTab from "../demo/FloatingDocsTab";
 import PrototypeDemo, {
   SAMPLE_IMPORT_CSV,
   buildOutboundFhirBundle,
@@ -855,5 +856,72 @@ describe("<PrototypeDemo /> component workflows", () => {
     expect(
       within(main).getByText("Varicella-Zoster (VZV) IgG Non-Immune Vaccination Verification")
     ).toBeInTheDocument();
+  });
+});
+
+describe("<FloatingDocsTab /> draggable edge snapping", () => {
+  const STORAGE_KEY = "reprobridge:floating-docs-tab-v1";
+
+  beforeEach(() => {
+    window.localStorage.removeItem(STORAGE_KEY);
+  });
+
+  afterEach(() => {
+    window.localStorage.removeItem(STORAGE_KEY);
+  });
+
+  it("renders docked right by default and invokes onOpen on click", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+
+    render(<FloatingDocsTab count={5} onOpen={onOpen} />);
+    const tab = screen.getByRole("button", { name: /Open Clinical Source Documents \(5 synthetic records\)/i });
+
+    expect(tab).toHaveAttribute("data-dock-side", "right");
+    expect(tab.className).toContain("rounded-l-xl");
+    expect(tab.className).toContain("border-r-0");
+
+    await user.click(tab);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("snaps flush to the left edge after dragging across screen, persists dock state, and suppresses trailing click", () => {
+    const onOpen = vi.fn();
+    render(<FloatingDocsTab count={5} onOpen={onOpen} />);
+    const tab = screen.getByRole("button", { name: /Open Clinical Source Documents/i });
+
+    const startX = window.innerWidth - 20;
+    fireEvent.pointerDown(tab, { button: 0, pointerId: 1, clientX: startX, clientY: 320 });
+    fireEvent.pointerMove(tab, { pointerId: 1, clientX: 20, clientY: 220 });
+    expect(tab).toHaveAttribute("data-dragging", "true");
+    expect(tab.className).toContain("rounded-xl");
+
+    fireEvent.pointerUp(tab, { pointerId: 1, clientX: 20, clientY: 220 });
+    expect(tab).toHaveAttribute("data-dragging", "false");
+    expect(tab).toHaveAttribute("data-dock-side", "left");
+    expect(tab.className).toContain("rounded-r-xl");
+    expect(tab.className).toContain("border-l-0");
+
+    // Trailing browser click after pointerUp must not open the drawer
+    fireEvent.click(tab);
+    expect(onOpen).not.toHaveBeenCalled();
+
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "{}") as {
+      side?: string;
+    };
+    expect(saved.side).toBe("left");
+  });
+
+  it("snaps between left and right edges via ArrowLeft and ArrowRight keyboard navigation", () => {
+    render(<FloatingDocsTab count={5} onOpen={vi.fn()} />);
+    const tab = screen.getByRole("button", { name: /Open Clinical Source Documents/i });
+
+    fireEvent.keyDown(tab, { key: "ArrowLeft" });
+    expect(tab).toHaveAttribute("data-dock-side", "left");
+    expect(tab.className).toContain("rounded-r-xl");
+
+    fireEvent.keyDown(tab, { key: "ArrowRight" });
+    expect(tab).toHaveAttribute("data-dock-side", "right");
+    expect(tab.className).toContain("rounded-l-xl");
   });
 });

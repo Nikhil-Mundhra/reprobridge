@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { FileText } from "lucide-react";
 import ClinicalDocumentsDrawer from "./ClinicalDocumentsDrawer";
 import AuditGovernanceSection from "./demo/AuditGovernanceSection";
 import CareFlowAndPatientHeader from "./demo/CareFlowAndPatientHeader";
 import DemoTopBar from "./demo/DemoTopBar";
 import FhirExportModal from "./demo/FhirExportModal";
+import FloatingDocsTab from "./demo/FloatingDocsTab";
 import ObligationIntakeModal from "./demo/ObligationIntakeModal";
 import ObligationPassportSection from "./demo/ObligationPassportSection";
 import OrchestratorHarnessSection from "./demo/OrchestratorHarnessSection";
@@ -492,21 +492,11 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         displayHandoff={displayHandoff}
       />
 
-      {/* Persistent Right-Edge Side Tab for Clinician Source Documents */}
-      <button
-        type="button"
-        onClick={() => openClinicalDocuments()}
-        aria-label={`Open Clinical Source Documents (${totalClinicalDocCount} synthetic records)`}
-        className="fixed right-0 top-1/2 z-30 hidden -translate-y-1/2 flex-col items-center gap-2 rounded-l-xl border border-r-0 border-slate-300 bg-white/95 px-2.5 py-3.5 text-xs font-semibold text-slate-800 shadow-lg backdrop-blur-xs transition hover:border-teal-400 hover:bg-teal-50 hover:text-teal-950 md:flex"
-      >
-        <FileText className="h-4 w-4 text-teal-700" aria-hidden="true" />
-        <span className="[writing-mode:vertical-rl] rotate-180 tracking-wide">
-          Clinical Docs
-        </span>
-        <span className="rounded-full bg-teal-600 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white">
-          {totalClinicalDocCount}
-        </span>
-      </button>
+      {/* Draggable Edge-Snapping Tab for Clinician Source Documents */}
+      <FloatingDocsTab
+        count={totalClinicalDocCount}
+        onOpen={() => openClinicalDocuments()}
+      />
 
       {/* Clinician-Only Clinical Documents Side Drawer (Zero AI Egress) */}
       <ClinicalDocumentsDrawer
