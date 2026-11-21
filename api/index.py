@@ -18,6 +18,7 @@ from api.db import (
     list_evidence_for_obligation,
     list_obligations,
     list_patient_summaries,
+    query_patients,
     reset_obligations,
     update_obligation,
 )
@@ -85,15 +86,8 @@ class EvidenceIntakeRequest(BaseModel):
 def _filter_audit_events(
     obligations: list[dict[str, Any]], patient_id: str
 ) -> list[dict[str, Any]]:
-    all_events = list_audit_events()
-    if patient_id == "ALL":
-        return all_events
-    obl_ids = {str(o["id"]) for o in obligations}
-    return [
-        ev
-        for ev in all_events
-        if ev.get("obligation_id") in obl_ids or ev.get("obligation_id") is None
-    ]
+    obl_ids = None if patient_id == "ALL" else {str(o["id"]) for o in obligations}
+    return list_audit_events(obligation_ids=obl_ids)
 
 
 def _run_transition(event_type: str, patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
@@ -150,6 +144,7 @@ def _run_transition(event_type: str, patient_id: str = "PAT-AE-4092") -> dict[st
         "obligations": updated_obls,
         "audit_events": _filter_audit_events(updated_obls, patient_id),
         "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
     }
 
 
@@ -203,6 +198,7 @@ def _stream_transition_events(
             "obligations": mid_obls,
             "audit_events": _filter_audit_events(mid_obls, patient_id),
             "patients": list_patient_summaries(),
+            "cohort_totals": query_patients(limit=1)["cohort_totals"],
             "privacy_report": state["privacy_report"],
             "trace": state["trace"],
         },
@@ -273,6 +269,7 @@ def _stream_transition_events(
             "obligations": final_obls,
             "audit_events": _filter_audit_events(final_obls, patient_id),
             "patients": list_patient_summaries(),
+            "cohort_totals": query_patients(limit=1)["cohort_totals"],
         },
     )
 
@@ -293,9 +290,23 @@ def health():
 
 
 @app.get("/api/patients")
-def get_patients():
-    """List synthetic patient cohort summaries with per-patient obligation counts."""
-    return {"patients": list_patient_summaries()}
+def get_patients(
+    q: str = "",
+    stage: str = "ALL",
+    triage: str = "ALL",
+    sort: str = "urgency",
+    limit: int = 20,
+    offset: int = 0,
+):
+    """Search, filter, sort, and paginate patient cohort summaries with global totals."""
+    return query_patients(
+        q=q,
+        stage=stage,
+        triage=triage,
+        sort=sort,
+        limit=max(1, min(limit, 100)),
+        offset=max(0, offset),
+    )
 
 
 @app.get("/api/obligations")
@@ -306,6 +317,7 @@ def get_obligations(patient_id: str = "PAT-AE-4092"):
         "obligations": obls,
         "audit_events": _filter_audit_events(obls, patient_id),
         "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
     }
 
 
@@ -383,6 +395,7 @@ def import_obligations(body: ObligationImportRequest):
         "obligations": obls_for_pid,
         "audit_events": _filter_audit_events(obls_for_pid, target_pid),
         "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
     }
 
 
@@ -398,7 +411,9 @@ def get_obligation_evidence(obligation_id: str):
 @app.post("/api/obligations/{obligation_id}/evidence")
 def add_obligation_evidence(obligation_id: str, body: EvidenceIntakeRequest):
     """Attach a new incoming clinical evidence record to an obligation in Neon Postgres."""
-    existing = next((o for o in list_obligations() if o["id"] == obligation_id), None)
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
     if existing is None:
         raise HTTPException(status_code=404, detail="Clinical obligation not found")
     current_ev = list_evidence_for_obligation(obligation_id)
@@ -426,10 +441,12 @@ def add_obligation_evidence(obligation_id: str, body: EvidenceIntakeRequest):
         summary=f"Recorded {record['fhir_resource_type']} evidence ({ev_id}) for {obligation_id}: {record['result_value']}",
         obligation_id=obligation_id,
     )
+    pid = str(existing.get("patient_id") or "PAT-AE-4092")
+    obls = list_obligations(patient_id=pid)
     return {
         "record": record,
         "evidence": list_evidence_for_obligation(obligation_id),
-        "audit_events": list_audit_events(),
+        "audit_events": _filter_audit_events(obls, pid),
     }
 
 
@@ -508,6 +525,7 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
         "obligation": updated,
         "audit_events": _filter_audit_events(obls, patient_id),
         "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
     }
 
 

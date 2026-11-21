@@ -789,16 +789,41 @@ describe("<PrototypeDemo /> component workflows", () => {
     expect(within(docsDialog).getByText("4.80")).toBeInTheDocument();
   });
 
-  it("renders the 3-patient Population Cohort Switcher and switches to Fatima Al-Zaabi (PAT-AE-5180)", async () => {
+  it("renders a compact Population Cohort Switcher, opens searchable/sortable registry, and switches to Fatima Al-Zaabi (PAT-AE-5180)", async () => {
     const user = userEvent.setup();
     render(<PrototypeDemo onBackToTutorial={vi.fn()} />);
 
-    const cohort = screen.getByRole("region", { name: /Population Cohort Switcher/i });
-    expect(within(cohort).getByText("Amina Al-Mansoori (Synthetic)")).toBeInTheDocument();
-    expect(within(cohort).getByText("Fatima Al-Zaabi (Synthetic)")).toBeInTheDocument();
-    expect(within(cohort).getByText("Sara Al-Nuaimi (Synthetic)")).toBeInTheDocument();
+    const cohortStrip = screen.getByRole("region", { name: /Population Cohort Switcher/i });
+    expect(within(cohortStrip).getByText("3 Patients")).toBeInTheDocument();
+    expect(within(cohortStrip).getByText("1/3")).toBeInTheDocument();
 
-    await user.click(within(cohort).getByRole("tab", { name: /Fatima Al-Zaabi/i }));
+    // Open searchable/sortable Population Registry dialog
+    await user.click(within(cohortStrip).getByRole("button", { name: /Switch Patient/i }));
+    const registry = await screen.findByRole("dialog", { name: /Population Registry/i });
+
+    expect(within(registry).getByText("Amina Al-Mansoori (Synthetic)")).toBeInTheDocument();
+    expect(within(registry).getByText("Fatima Al-Zaabi (Synthetic)")).toBeInTheDocument();
+    expect(within(registry).getByText("Sara Al-Nuaimi (Synthetic)")).toBeInTheDocument();
+
+    // Test sortable column header semantics (aria-sort updates on Patient column)
+    const patientSortBtn = within(registry).getByRole("button", { name: "Patient" });
+    await user.click(patientSortBtn);
+    expect(patientSortBtn.closest("th")).toHaveAttribute("aria-sort", "ascending");
+
+    // Search narrows down to Fatima Al-Zaabi
+    const searchInput = within(registry).getByRole("searchbox", {
+      name: /Search patients by name, MRN, track, or facility/i,
+    });
+    await user.type(searchInput, "Fatima");
+    expect(within(registry).queryByText("Sara Al-Nuaimi (Synthetic)")).not.toBeInTheDocument();
+    expect(within(registry).getByText("1–1")).toBeInTheDocument();
+
+    // Select Fatima to switch the main workspace
+    await user.click(within(registry).getByRole("button", { name: /Open Workspace/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: /Population Registry/i })).not.toBeInTheDocument();
+    });
 
     const main = screen.getByRole("main");
     expect(await within(main).findByText(/Fatima Al-Zaabi \(Synthetic\)/)).toBeInTheDocument();

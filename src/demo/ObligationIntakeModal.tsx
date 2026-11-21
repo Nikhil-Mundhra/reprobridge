@@ -3,7 +3,7 @@ import { Plus, Upload, X } from "lucide-react";
 import { handleSpatialKeyDown } from "../spatialNav";
 import { SAMPLE_IMPORT_CSV } from "./constants";
 import { parseDelimitedTable } from "./helpers";
-import type { AuditEvent, Obligation, PatientCohortSummary } from "./types";
+import type { AuditEvent, CohortTotals, Obligation, PatientCohortSummary } from "./types";
 
 interface ObligationIntakeModalProps {
   isOpen: boolean;
@@ -13,7 +13,8 @@ interface ObligationIntakeModalProps {
   onImported: (
     obligations: Obligation[],
     auditEvents: AuditEvent[],
-    patients?: PatientCohortSummary[]
+    patients?: PatientCohortSummary[],
+    cohortTotals?: CohortTotals
   ) => void;
   onError: (msg: string | null) => void;
 }
@@ -71,7 +72,7 @@ export default function ObligationIntakeModal({
         throw new Error(errBody.detail || `Import failed (HTTP ${res.status})`);
       }
       const data = await res.json();
-      onImported(data.obligations ?? [], data.audit_events ?? [], data.patients);
+      onImported(data.obligations ?? [], data.audit_events ?? [], data.patients, data.cohort_totals);
       setManualTitle("");
       setManualRationale("");
       setManualIncomingResult("");
@@ -110,7 +111,7 @@ export default function ObligationIntakeModal({
         throw new Error(errBody.detail || `Table import failed (HTTP ${res.status})`);
       }
       const data = await res.json();
-      onImported(data.obligations ?? [], data.audit_events ?? [], data.patients);
+      onImported(data.obligations ?? [], data.audit_events ?? [], data.patients, data.cohort_totals);
       onClose();
     } catch (err) {
       onError(err instanceof Error ? err.message : "Table import failed");

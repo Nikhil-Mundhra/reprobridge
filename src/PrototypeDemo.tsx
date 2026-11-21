@@ -15,6 +15,7 @@ import { parseStreamedSections } from "./demo/helpers";
 import type {
   AiMetadata,
   AuditEvent,
+  CohortTotals,
   HealthResponse,
   Obligation,
   PatientCohortSummary,
@@ -48,6 +49,7 @@ const SEEDED_OBLIGATION_IDS = new Set([
 export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) {
   const [selectedPatientId, setSelectedPatientId] = useState("PAT-AE-4092");
   const [patients, setPatients] = useState<PatientCohortSummary[]>(DEFAULT_PATIENT_COHORT);
+  const [cohortTotals, setCohortTotals] = useState<CohortTotals | undefined>(undefined);
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -107,6 +109,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         if (Array.isArray(data.patients) && data.patients.length > 0) {
           setPatients(data.patients);
         }
+        if (data.cohort_totals) {
+          setCohortTotals(data.cohort_totals);
+        }
       } else {
         setError(`ReproBridge API returned HTTP ${oRes.status} while loading obligations.`);
       }
@@ -139,7 +144,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
   useEffect(() => {
     const onEscape = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || docsDrawerOpen) return;
+      if (e.key !== "Escape" || docsDrawerOpen || document.querySelector("dialog[open]")) {
+        return;
+      }
       if (verifyTarget) {
         setVerifyTarget(null);
       } else if (showFhirExportModal) {
@@ -211,6 +218,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           if (Array.isArray(payload.patients) && payload.patients.length > 0) {
             setPatients(payload.patients);
           }
+          if (payload.cohort_totals) setCohortTotals(payload.cohort_totals);
           setPrivacyReport(payload.privacy_report ?? null);
           setTrace(payload.trace ?? []);
           setStreamingPhase("UAE Firewall verified (0 PHI) · Streaming OpenRouter synthesis…");
@@ -226,6 +234,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           if (Array.isArray(payload.patients) && payload.patients.length > 0) {
             setPatients(payload.patients);
           }
+          if (payload.cohort_totals) setCohortTotals(payload.cohort_totals);
           setAgentSummary(payload.agent_summary ?? null);
           setSpecialistHandoff(payload.specialist_handoff ?? null);
           setAiMetadata(payload.ai_metadata ?? null);
@@ -313,6 +322,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         if (Array.isArray(data.patients) && data.patients.length > 0) {
           setPatients(data.patients);
         }
+        if (data.cohort_totals) {
+          setCohortTotals(data.cohort_totals);
+        }
       }
     } finally {
       setLoading(false);
@@ -364,6 +376,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
       <PatientCohortBar
         patients={patients}
+        cohortTotals={cohortTotals}
         selectedPatientId={selectedPatientId}
         loading={loading || isStreaming}
         onSelectPatient={handleSelectPatient}
@@ -457,11 +470,14 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         patientId={selectedPatientId}
         patientName={activePatientName}
         onClose={() => setShowIntakeModal(false)}
-        onImported={(nextObligations, nextAuditEvents, nextPatients) => {
+        onImported={(nextObligations, nextAuditEvents, nextPatients, nextCohortTotals) => {
           setObligations(nextObligations);
           setAuditEvents(nextAuditEvents);
           if (Array.isArray(nextPatients) && nextPatients.length > 0) {
             setPatients(nextPatients);
+          }
+          if (nextCohortTotals) {
+            setCohortTotals(nextCohortTotals);
           }
         }}
         onError={setError}

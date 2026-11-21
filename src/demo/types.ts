@@ -116,3 +116,11 @@ export interface PatientCohortSummary {
   deferred_count: number;
   closed_count: number;
 }
+
+export interface CohortTotals {
+  total_patients: number;
+  total_open: number;
+  total_urgent: number;
+  total_deferred: number;
+  total_closed: number;
+}

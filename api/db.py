@@ -11,7 +11,10 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    case,
     create_engine,
+    func,
+    or_,
     select,
     text,
 )
@@ -503,66 +506,273 @@ def _derive_life_stage(obligations: list[dict[str, Any]]) -> str:
     return "Preconception"
 
 
+def _build_patient_summary(
+    pid: str,
+    *,
+    patient_name: str | None,
+    life_stage: str,
+    total_obligations: int,
+    open_count: int,
+    urgent_count: int,
+    deferred_count: int,
+    closed_count: int,
+) -> dict[str, Any]:
+    meta = PATIENT_COHORT_META.get(pid, {})
+    return {
+        "patient_id": pid,
+        "patient_name": meta.get("patient_name") or patient_name or f"Patient {pid}",
+        "age_sex": meta.get("age_sex", "Adult · F"),
+        "clinical_track": meta.get("clinical_track", "Preventive Care Continuity"),
+        "facility_a": meta.get("facility_a", "Primary Care Clinic"),
+        "facility_b": meta.get("facility_b", "OB-GYN Specialist Center"),
+        "life_stage": life_stage,
+        "total_obligations": int(total_obligations),
+        "open_count": int(open_count),
+        "urgent_count": int(urgent_count),
+        "deferred_count": int(deferred_count),
+        "closed_count": int(closed_count),
+    }
+
+
 def list_patient_summaries() -> list[dict[str, Any]]:
-    """Aggregate obligation counts and active life stage per patient in cohort order."""
-    all_rows = list_obligations(patient_id="ALL")
-    by_patient: dict[str, list[dict[str, Any]]] = {}
-    for row in all_rows:
-        pid = str(row.get("patient_id", "PAT-AE-4092"))
-        by_patient.setdefault(pid, []).append(row)
+    """Aggregate obligation counts and active life stage per patient via SQL GROUP BY."""
+    engine = get_engine()
+    aggregated: dict[str, dict[str, Any]] = {}
+
+    if engine is None:
+        by_patient: dict[str, list[dict[str, Any]]] = {}
+        for row in _MEMORY_STORE:
+            pid = str(row.get("patient_id", "PAT-AE-4092"))
+            by_patient.setdefault(pid, []).append(row)
+        for pid, rows in by_patient.items():
+            aggregated[pid] = _build_patient_summary(
+                pid,
+                patient_name=rows[0].get("patient_name") if rows else None,
+                life_stage=_derive_life_stage(rows),
+                total_obligations=len(rows),
+                open_count=sum(
+                    1
+                    for r in rows
+                    if r.get("status") not in {"VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM"}
+                ),
+                urgent_count=sum(
+                    1
+                    for r in rows
+                    if r.get("priority") == "URGENT" and r.get("status") != "VERIFIED_CLOSED"
+                ),
+                deferred_count=sum(
+                    1 for r in rows if r.get("status") == "DEFERRED_TO_POSTPARTUM"
+                ),
+                closed_count=sum(1 for r in rows if r.get("status") == "VERIFIED_CLOSED"),
+            )
+    else:
+        ensure_schema_and_seed()
+        stmt = select(
+            obligations_table.c.patient_id,
+            func.max(obligations_table.c.patient_name).label("patient_name"),
+            func.count(obligations_table.c.id).label("total_obligations"),
+            func.sum(
+                case(
+                    (
+                        obligations_table.c.status.notin_(
+                            ["VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM"]
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("open_count"),
+            func.sum(
+                case(
+                    (
+                        (obligations_table.c.priority == "URGENT")
+                        & (obligations_table.c.status != "VERIFIED_CLOSED"),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("urgent_count"),
+            func.sum(
+                case(
+                    (obligations_table.c.status == "DEFERRED_TO_POSTPARTUM", 1),
+                    else_=0,
+                )
+            ).label("deferred_count"),
+            func.sum(
+                case((obligations_table.c.status == "VERIFIED_CLOSED", 1), else_=0)
+            ).label("closed_count"),
+            func.max(
+                case((obligations_table.c.life_stage == "Postpartum", 1), else_=0)
+            ).label("has_postpartum"),
+            func.max(
+                case((obligations_table.c.life_stage.like("Antenatal%"), 1), else_=0)
+            ).label("has_antenatal"),
+            func.max(obligations_table.c.life_stage).label("sample_life_stage"),
+        ).group_by(obligations_table.c.patient_id)
+
+        with engine.connect() as conn:
+            for row in conn.execute(stmt).mappings():
+                pid = str(row["patient_id"])
+                if row["has_postpartum"]:
+                    stage = "Postpartum"
+                elif row["has_antenatal"]:
+                    stage = "Antenatal (Trimester 1)"
+                else:
+                    stage = str(row["sample_life_stage"] or "Preconception")
+                aggregated[pid] = _build_patient_summary(
+                    pid,
+                    patient_name=row["patient_name"],
+                    life_stage=stage,
+                    total_obligations=int(row["total_obligations"] or 0),
+                    open_count=int(row["open_count"] or 0),
+                    urgent_count=int(row["urgent_count"] or 0),
+                    deferred_count=int(row["deferred_count"] or 0),
+                    closed_count=int(row["closed_count"] or 0),
+                )
 
     ordered_ids = list(PATIENT_COHORT_META.keys())
-    for pid in by_patient:
+    for pid in sorted(aggregated):
         if pid not in PATIENT_COHORT_META:
             ordered_ids.append(pid)
 
     summaries: list[dict[str, Any]] = []
     for pid in ordered_ids:
-        rows = by_patient.get(pid, [])
-        meta = PATIENT_COHORT_META.get(pid, {})
-        patient_name = (
-            meta.get("patient_name")
-            or (rows[0].get("patient_name") if rows else None)
-            or f"Patient {pid}"
-        )
-        summaries.append(
-            {
-                "patient_id": pid,
-                "patient_name": patient_name,
-                "age_sex": meta.get("age_sex", "Adult · F"),
-                "clinical_track": meta.get("clinical_track", "Preventive Care Continuity"),
-                "facility_a": meta.get("facility_a", "Primary Care Clinic"),
-                "facility_b": meta.get("facility_b", "OB-GYN Specialist Center"),
-                "life_stage": _derive_life_stage(rows),
-                "total_obligations": len(rows),
-                "open_count": sum(
-                    1
-                    for r in rows
-                    if r.get("status") not in {"VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM"}
-                ),
-                "urgent_count": sum(
-                    1
-                    for r in rows
-                    if r.get("priority") == "URGENT" and r.get("status") != "VERIFIED_CLOSED"
-                ),
-                "deferred_count": sum(
-                    1 for r in rows if r.get("status") == "DEFERRED_TO_POSTPARTUM"
-                ),
-                "closed_count": sum(1 for r in rows if r.get("status") == "VERIFIED_CLOSED"),
-            }
-        )
+        if pid in aggregated:
+            summaries.append(aggregated[pid])
+        else:
+            summaries.append(
+                _build_patient_summary(
+                    pid,
+                    patient_name=None,
+                    life_stage="Preconception",
+                    total_obligations=0,
+                    open_count=0,
+                    urgent_count=0,
+                    deferred_count=0,
+                    closed_count=0,
+                )
+            )
     return summaries
 
 
-def list_audit_events() -> list[dict[str, Any]]:
+def query_patients(
+    q: str = "",
+    stage: str = "ALL",
+    triage: str = "ALL",
+    sort: str = "urgency",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Filter, sort, and paginate the patient cohort with global cohort totals."""
+    all_summaries = list_patient_summaries()
+    cohort_totals = {
+        "total_patients": len(all_summaries),
+        "total_open": sum(p["open_count"] for p in all_summaries),
+        "total_urgent": sum(p["urgent_count"] for p in all_summaries),
+        "total_deferred": sum(p["deferred_count"] for p in all_summaries),
+        "total_closed": sum(p["closed_count"] for p in all_summaries),
+    }
+
+    query_text = q.strip().lower()
+    stage_norm = stage.strip().lower()
+    triage_norm = triage.strip().lower()
+    sort_norm = sort.strip().lower()
+
+    cohort_order = {p["patient_id"]: idx for idx, p in enumerate(all_summaries)}
+    filtered: list[dict[str, Any]] = []
+    for p in all_summaries:
+        if query_text:
+            haystack = " ".join(
+                [
+                    str(p.get("patient_id", "")),
+                    str(p.get("patient_name", "")),
+                    str(p.get("clinical_track", "")),
+                    str(p.get("facility_a", "")),
+                    str(p.get("facility_b", "")),
+                ]
+            ).lower()
+            if query_text not in haystack:
+                continue
+
+        if stage_norm and stage_norm != "all":
+            if not str(p.get("life_stage", "")).lower().startswith(stage_norm):
+                continue
+
+        if triage_norm == "urgent" and p["urgent_count"] <= 0:
+            continue
+        if triage_norm == "open" and p["open_count"] <= 0:
+            continue
+        if triage_norm == "deferred" and p["deferred_count"] <= 0:
+            continue
+        if triage_norm == "closed" and not (
+            p["total_obligations"] > 0 and p["closed_count"] == p["total_obligations"]
+        ):
+            continue
+
+        filtered.append(p)
+
+    if sort_norm == "name":
+        filtered.sort(key=lambda p: str(p.get("patient_name", "")).lower())
+    elif sort_norm == "stage":
+        def _stage_rank(p: dict[str, Any]) -> tuple[int, int]:
+            ls = str(p.get("life_stage", "")).lower()
+            rank = 0 if ls == "postpartum" else 1 if ls.startswith("antenatal") else 2
+            return (rank, cohort_order.get(p["patient_id"], 9999))
+
+        filtered.sort(key=_stage_rank)
+    else:
+        filtered.sort(
+            key=lambda p: (
+                -p["urgent_count"],
+                -p["open_count"],
+                cohort_order.get(p["patient_id"], 9999),
+            )
+        )
+
+    total = len(filtered)
+    safe_offset = max(0, offset)
+    safe_limit = max(1, min(limit, 100))
+    page = filtered[safe_offset : safe_offset + safe_limit]
+    return {
+        "patients": page,
+        "total": total,
+        "cohort_totals": cohort_totals,
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "has_more": safe_offset + len(page) < total,
+    }
+
+
+def list_audit_events(
+    obligation_ids: set[str] | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(limit, 500))
     engine = get_engine()
     if engine is None:
-        return list(reversed([dict(item) for item in _MEMORY_AUDIT]))
+        events = list(reversed([dict(item) for item in _MEMORY_AUDIT]))
+        if obligation_ids is not None:
+            events = [
+                e
+                for e in events
+                if e.get("obligation_id") in obligation_ids or e.get("obligation_id") is None
+            ]
+        return events[:safe_limit]
     ensure_schema_and_seed()
     with engine.connect() as conn:
-        rows = conn.execute(
-            select(audit_events_table).order_by(audit_events_table.c.id.desc())
-        ).mappings()
+        stmt = select(audit_events_table).order_by(audit_events_table.c.id.desc())
+        if obligation_ids is not None:
+            if obligation_ids:
+                stmt = stmt.where(
+                    or_(
+                        audit_events_table.c.obligation_id.in_(obligation_ids),
+                        audit_events_table.c.obligation_id.is_(None),
+                    )
+                )
+            else:
+                stmt = stmt.where(audit_events_table.c.obligation_id.is_(None))
+        stmt = stmt.limit(safe_limit)
+        rows = conn.execute(stmt).mappings()
         return [dict(row) for row in rows]
 
 
@@ -732,16 +942,11 @@ def reset_obligations(patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
             )
 
     obls = list_obligations(patient_id=patient_id)
-    obl_ids = {o["id"] for o in obls}
-    all_events = list_audit_events()
-    filtered_events = (
-        all_events
-        if patient_id == "ALL"
-        else [e for e in all_events if e.get("obligation_id") in obl_ids or e.get("obligation_id") is None]
-    )
+    obl_ids = None if patient_id == "ALL" else {str(o["id"]) for o in obls}
     return {
         "patient_id": patient_id,
         "obligations": obls,
-        "audit_events": filtered_events,
+        "audit_events": list_audit_events(obligation_ids=obl_ids),
         "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
     }

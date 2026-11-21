@@ -163,12 +163,14 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
 
     cohort = client.get("/api/patients")
     assert cohort.status_code == 200
-    patients = cohort.json()["patients"]
+    cohort_json = cohort.json()
+    patients = cohort_json["patients"]
     assert [p["patient_id"] for p in patients] == [
         "PAT-AE-4092",
         "PAT-AE-5180",
         "PAT-AE-6304",
     ]
+    assert cohort_json["cohort_totals"]["total_patients"] == 3
 
     fatima_initial = client.get("/api/obligations?patient_id=PAT-AE-5180")
     assert fatima_initial.status_code == 200
@@ -191,5 +193,46 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
     assert sara_by_id["OBL-301"]["status"] == "ESCALATED_FOR_REVIEW"
     assert sara_by_id["OBL-301"]["priority"] == "URGENT"
     assert sara_by_id["OBL-302"]["status"] == "DEFERRED_TO_POSTPARTUM"
+
+    # Scalable cohort search, triage filter, pagination, and global cohort totals
+    search_resp = client.get("/api/patients?q=Fatima")
+    assert search_resp.status_code == 200
+    assert [p["patient_id"] for p in search_resp.json()["patients"]] == ["PAT-AE-5180"]
+
+    urgent_resp = client.get("/api/patients?triage=urgent")
+    assert urgent_resp.status_code == 200
+    urgent_ids = {p["patient_id"] for p in urgent_resp.json()["patients"]}
+    assert {"PAT-AE-5180", "PAT-AE-6304"}.issubset(urgent_ids)
+    assert urgent_resp.json()["cohort_totals"]["total_urgent"] >= 2
+
+    page_resp = client.get("/api/patients?limit=1&offset=1")
+    assert page_resp.status_code == 200
+    assert len(page_resp.json()["patients"]) == 1
+    assert page_resp.json()["total"] == 3
+    assert page_resp.json()["has_more"] is True
+
+    # Rule-version dispatch scales automatically to newly imported patients without hardcoded IDs
+    new_patient_import = client.post(
+        "/api/obligations/import",
+        json={
+            "source_label": "Multi-Patient Scalability Test",
+            "obligations": [
+                {
+                    "patient_id": "PAT-AE-7777",
+                    "patient_name": "Nadia Al-Kaabi (Synthetic)",
+                    "title": "Subclinical Hypothyroidism Follow-up (TSH 5.1 mIU/L)",
+                    "rationale": "Elevated TSH requires first-trimester escalation.",
+                    "rule_version": "RB-THYROID-v1.4.0",
+                    "priority": "HIGH",
+                }
+            ],
+        },
+    )
+    assert new_patient_import.status_code == 200
+    nadia_preg = client.post("/api/transitions/pregnancy?patient_id=PAT-AE-7777")
+    assert nadia_preg.status_code == 200
+    nadia_obl = nadia_preg.json()["obligations"][0]
+    assert nadia_obl["status"] == "ESCALATED_FOR_REVIEW"
+    assert nadia_obl["priority"] == "URGENT"
 
     client.post("/api/demo/reset")

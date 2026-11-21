@@ -42,114 +42,177 @@ def detect_open_obligations(state: TransitionState) -> dict[str, Any]:
     return {"obligations": open_items, "trace": trace}
 
 
+def _evaluate_rule_for_obligation(event_type: str, item: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch deterministic transition updates by versioned rule prefix instead of obligation ID."""
+    obl_id = item["id"]
+    rule_ver = str(item.get("rule_version") or "").upper()
+    text_ctx = f"{item.get('title', '')} {item.get('rationale', '')}".lower()
+
+    if event_type == "FHIR_PREGNANCY_CONFIRMED":
+        if rule_ver.startswith("RB-THYROID-"):
+            return {
+                "id": obl_id,
+                "life_stage": "Antenatal (Trimester 1)",
+                "priority": "URGENT",
+                "status": "ESCALATED_FOR_REVIEW",
+                "owner": "Maternal-Fetal Medicine / OB-GYN",
+                "rationale": (
+                    "PREGNANCY TRANSITION TRIGGERED: Preconception TSH 4.8 mIU/L exceeds "
+                    "first-trimester target (<2.5 mIU/L). Urgent levothyroxine evaluation and "
+                    "repeat thyroid panel routed for clinician approval."
+                ),
+            }
+        if rule_ver.startswith("RB-IMMUNE-"):
+            is_varicella = "varicella" in text_ctx or "vzv" in text_ctx
+            vaccine_rationale = (
+                "PREGNANCY TRANSITION TRIGGERED: Live-attenuated Varicella vaccine is "
+                "contraindicated during pregnancy. Obligation preserved on Clinical "
+                "Obligation Passport and auto-scheduled for postpartum closure."
+                if is_varicella
+                else "PREGNANCY TRANSITION TRIGGERED: Live MMR vaccine is contraindicated "
+                "during pregnancy. Obligation preserved on Clinical Obligation Passport "
+                "and auto-scheduled for postpartum closure."
+            )
+            return {
+                "id": obl_id,
+                "life_stage": "Antenatal (Trimester 1)",
+                "priority": "HIGH",
+                "status": "DEFERRED_TO_POSTPARTUM",
+                "owner": "Postpartum Care Pathway",
+                "rationale": vaccine_rationale,
+            }
+        if rule_ver.startswith("RB-METABOLIC-"):
+            return {
+                "id": obl_id,
+                "life_stage": "Antenatal (Trimester 1)",
+                "priority": "URGENT",
+                "status": "ESCALATED_FOR_REVIEW",
+                "owner": "Maternal Endocrinology / OB-GYN",
+                "rationale": (
+                    "PREGNANCY TRANSITION TRIGGERED: Preconception dysglycemia (FBG 112 mg/dL, "
+                    "HbA1c 6.1%) escalates in Trimester 1. Urgent 75g OGTT and medical "
+                    "nutrition / glycemic titration routed for clinician approval."
+                ),
+            }
+        if rule_ver.startswith("RB-PREECLAMPSIA-"):
+            return {
+                "id": obl_id,
+                "life_stage": "Antenatal (Trimester 1)",
+                "priority": "URGENT",
+                "status": "ESCALATED_FOR_REVIEW",
+                "owner": "Maternal-Fetal Medicine / OB-GYN",
+                "rationale": (
+                    "PREGNANCY TRANSITION TRIGGERED: Time-sensitive 12–16 week preeclampsia "
+                    "prophylaxis window opened. Escalated for urgent low-dose aspirin (150 mg "
+                    "nightly) and BP review by MFM / OB-GYN."
+                ),
+            }
+        if rule_ver.startswith("RB-HPV-"):
+            return {
+                "id": obl_id,
+                "life_stage": "Antenatal (Trimester 1)",
+                "priority": "MEDIUM",
+                "status": "DEFERRED_TO_POSTPARTUM",
+                "owner": "Postpartum Care Pathway",
+                "rationale": (
+                    "PREGNANCY TRANSITION TRIGGERED: Routine HPV 9-valent vaccine series is "
+                    "deferred during pregnancy. Preserved on Clinical Obligation Passport "
+                    "and auto-queued for postpartum discharge completion."
+                ),
+            }
+        return {
+            "id": obl_id,
+            "life_stage": "Antenatal (Trimester 1)",
+            "priority": "HIGH" if item.get("priority") == "MEDIUM" else item.get("priority", "HIGH"),
+            "status": "ESCALATED_FOR_REVIEW",
+        }
+
+    # event_type == "FHIR_DELIVERY_POSTPARTUM"
+    if rule_ver.startswith("RB-IMMUNE-"):
+        is_varicella = "varicella" in text_ctx or "vzv" in text_ctx
+        postpartum_rationale = (
+            "POSTPARTUM TRANSITION TRIGGERED: Pregnancy contraindication lifted. "
+            "Deferred Varicella (VZV) non-immune obligation reactivated for pre-discharge "
+            "vaccination and evidence-verified closure."
+            if is_varicella
+            else "POSTPARTUM TRANSITION TRIGGERED: Pregnancy contraindication lifted. "
+            "Deferred Rubella IgG non-immune obligation reactivated for pre-discharge "
+            "MMR vaccination and evidence-verified clinician closure."
+        )
+        return {
+            "id": obl_id,
+            "life_stage": "Postpartum",
+            "priority": "URGENT",
+            "status": "ESCALATED_FOR_REVIEW",
+            "owner": "Postpartum OB-GYN / Immunization Nurse",
+            "rationale": postpartum_rationale,
+        }
+    if rule_ver.startswith("RB-THYROID-"):
+        return {
+            "id": obl_id,
+            "life_stage": "Postpartum",
+            "priority": "HIGH",
+            "status": "ESCALATED_FOR_REVIEW",
+            "owner": "Postpartum Endocrinology / OB-GYN",
+            "rationale": (
+                "POSTPARTUM TRANSITION TRIGGERED: Unresolved thyroid obligation carried "
+                "forward for 6-week postpartum TSH reassessment and dose adjustment."
+            ),
+        }
+    if rule_ver.startswith("RB-METABOLIC-"):
+        return {
+            "id": obl_id,
+            "life_stage": "Postpartum",
+            "priority": "HIGH",
+            "status": "ESCALATED_FOR_REVIEW",
+            "owner": "Postpartum Endocrinology / Primary Care",
+            "rationale": (
+                "POSTPARTUM TRANSITION TRIGGERED: Unresolved dysglycemia obligation "
+                "carried forward for 6-week postpartum 75g OGTT screening."
+            ),
+        }
+    if rule_ver.startswith("RB-HPV-"):
+        return {
+            "id": obl_id,
+            "life_stage": "Postpartum",
+            "priority": "URGENT",
+            "status": "ESCALATED_FOR_REVIEW",
+            "owner": "Postpartum OB-GYN / Immunization Nurse",
+            "rationale": (
+                "POSTPARTUM TRANSITION TRIGGERED: Pregnancy deferral lifted. Deferred "
+                "HPV 9-valent Dose 2 obligation reactivated for pre-discharge administration."
+            ),
+        }
+    if rule_ver.startswith("RB-PREECLAMPSIA-"):
+        return {
+            "id": obl_id,
+            "life_stage": "Postpartum",
+            "priority": "HIGH",
+            "status": "ESCALATED_FOR_REVIEW",
+            "owner": "Postpartum Cardiology / OB-GYN",
+            "rationale": (
+                "POSTPARTUM TRANSITION TRIGGERED: Preeclampsia risk obligation carried "
+                "forward for 72-hour and 6-week postpartum BP surveillance."
+            ),
+        }
+    return {
+        "id": obl_id,
+        "life_stage": "Postpartum",
+        "priority": "HIGH",
+        "status": "ESCALATED_FOR_REVIEW",
+    }
+
+
 def evaluate_life_stage_transition(state: TransitionState) -> dict[str, Any]:
     """Deterministic step: apply version-controlled clinical rules (zero LLM involvement)."""
     event_type = state["event_type"]
     updates: list[dict[str, Any]] = []
 
-    if event_type == "FHIR_PREGNANCY_CONFIRMED":
+    if event_type in {"FHIR_PREGNANCY_CONFIRMED", "FHIR_DELIVERY_POSTPARTUM"}:
         for item in state["obligations"]:
-            obl_id = item["id"]
-            if obl_id == "OBL-101":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Antenatal (Trimester 1)",
-                        "priority": "URGENT",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Maternal-Fetal Medicine / OB-GYN",
-                        "rationale": (
-                            "PREGNANCY TRANSITION TRIGGERED: Preconception TSH 4.8 mIU/L exceeds "
-                            "first-trimester target (<2.5 mIU/L). Urgent levothyroxine evaluation and "
-                            "repeat thyroid panel routed for clinician approval."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-102":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Antenatal (Trimester 1)",
-                        "priority": "HIGH",
-                        "status": "DEFERRED_TO_POSTPARTUM",
-                        "owner": "Postpartum Care Pathway",
-                        "rationale": (
-                            "PREGNANCY TRANSITION TRIGGERED: Live MMR vaccine is contraindicated "
-                            "during pregnancy. Obligation preserved on Clinical Obligation Passport "
-                            "and auto-scheduled for postpartum closure."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-201":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Antenatal (Trimester 1)",
-                        "priority": "URGENT",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Maternal Endocrinology / OB-GYN",
-                        "rationale": (
-                            "PREGNANCY TRANSITION TRIGGERED: Preconception dysglycemia (FBG 112 mg/dL, "
-                            "HbA1c 6.1%) escalates in Trimester 1. Urgent 75g OGTT and medical "
-                            "nutrition / glycemic titration routed for clinician approval."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-202":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Antenatal (Trimester 1)",
-                        "priority": "HIGH",
-                        "status": "DEFERRED_TO_POSTPARTUM",
-                        "owner": "Postpartum Care Pathway",
-                        "rationale": (
-                            "PREGNANCY TRANSITION TRIGGERED: Live-attenuated Varicella vaccine is "
-                            "contraindicated during pregnancy. Obligation preserved on Clinical "
-                            "Obligation Passport and auto-scheduled for postpartum closure."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-301":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Antenatal (Trimester 1)",
-                        "priority": "URGENT",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Maternal-Fetal Medicine / OB-GYN",
-                        "rationale": (
-                            "PREGNANCY TRANSITION TRIGGERED: Time-sensitive 12–16 week preeclampsia "
-                            "prophylaxis window opened. Escalated for urgent low-dose aspirin (150 mg "
-                            "nightly) and BP review by MFM / OB-GYN."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-302":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Antenatal (Trimester 1)",
-                        "priority": "MEDIUM",
-                        "status": "DEFERRED_TO_POSTPARTUM",
-                        "owner": "Postpartum Care Pathway",
-                        "rationale": (
-                            "PREGNANCY TRANSITION TRIGGERED: Routine HPV 9-valent vaccine series is "
-                            "deferred during pregnancy. Preserved on Clinical Obligation Passport "
-                            "and auto-queued for postpartum discharge completion."
-                        ),
-                    }
-                )
-            else:
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Antenatal (Trimester 1)",
-                        "priority": "HIGH" if item.get("priority") == "MEDIUM" else item.get("priority", "HIGH"),
-                        "status": "ESCALATED_FOR_REVIEW",
-                    }
-                )
+            updates.append(_evaluate_rule_for_obligation(event_type, item))
 
+    if event_type == "FHIR_PREGNANCY_CONFIRMED":
         if any(u["id"] == "OBL-101" for u in updates):
             rule_detail = (
                 f"Applied versioned pregnancy rules to {len(updates)} obligation(s): "
@@ -166,104 +229,6 @@ def evaluate_life_stage_transition(state: TransitionState) -> dict[str, Any]:
             summary_tail = "; ".join(parts) if parts else "rules evaluated"
             rule_detail = f"Applied versioned pregnancy rules to {len(updates)} obligation(s): {summary_tail}."
     elif event_type == "FHIR_DELIVERY_POSTPARTUM":
-        for item in state["obligations"]:
-            obl_id = item["id"]
-            if obl_id == "OBL-102":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Postpartum",
-                        "priority": "URGENT",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Postpartum OB-GYN / Immunization Nurse",
-                        "rationale": (
-                            "POSTPARTUM TRANSITION TRIGGERED: Pregnancy contraindication lifted. "
-                            "Deferred Rubella IgG non-immune obligation reactivated for pre-discharge "
-                            "MMR vaccination and evidence-verified clinician closure."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-101":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Postpartum",
-                        "priority": "HIGH",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Postpartum Endocrinology / OB-GYN",
-                        "rationale": (
-                            "POSTPARTUM TRANSITION TRIGGERED: Unresolved thyroid obligation carried "
-                            "forward for 6-week postpartum TSH reassessment and dose adjustment."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-202":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Postpartum",
-                        "priority": "URGENT",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Postpartum OB-GYN / Immunization Nurse",
-                        "rationale": (
-                            "POSTPARTUM TRANSITION TRIGGERED: Pregnancy contraindication lifted. "
-                            "Deferred Varicella (VZV) non-immune obligation reactivated for pre-discharge "
-                            "vaccination and evidence-verified closure."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-201":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Postpartum",
-                        "priority": "HIGH",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Postpartum Endocrinology / Primary Care",
-                        "rationale": (
-                            "POSTPARTUM TRANSITION TRIGGERED: Unresolved dysglycemia obligation "
-                            "carried forward for 6-week postpartum 75g OGTT screening."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-302":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Postpartum",
-                        "priority": "URGENT",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Postpartum OB-GYN / Immunization Nurse",
-                        "rationale": (
-                            "POSTPARTUM TRANSITION TRIGGERED: Pregnancy deferral lifted. Deferred "
-                            "HPV 9-valent Dose 2 obligation reactivated for pre-discharge administration."
-                        ),
-                    }
-                )
-            elif obl_id == "OBL-301":
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Postpartum",
-                        "priority": "HIGH",
-                        "status": "ESCALATED_FOR_REVIEW",
-                        "owner": "Postpartum Cardiology / OB-GYN",
-                        "rationale": (
-                            "POSTPARTUM TRANSITION TRIGGERED: Preeclampsia risk obligation carried "
-                            "forward for 72-hour and 6-week postpartum BP surveillance."
-                        ),
-                    }
-                )
-            else:
-                updates.append(
-                    {
-                        "id": obl_id,
-                        "life_stage": "Postpartum",
-                        "priority": "HIGH",
-                        "status": "ESCALATED_FOR_REVIEW",
-                    }
-                )
-
         if any(u["id"] == "OBL-102" for u in updates):
             rule_detail = (
                 f"Applied versioned postpartum rules to {len(updates)} obligation(s): "
