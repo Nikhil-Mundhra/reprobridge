@@ -643,6 +643,47 @@ describe("<PrototypeDemo /> component workflows", () => {
         });
       }
 
+      if (pathname === "/api/obligations/OBL-101/explain" && method === "POST") {
+        return createJsonResponse({
+          obligation_id: "OBL-101",
+          headline: "Elevated Thyroid-Stimulating Hormone (Preconception)",
+          explanation:
+            "TSH of 4.8 mIU/L sits above the 4.0 preconception upper limit and will require tighter control below 2.5 mIU/L upon pregnancy confirmation.",
+          key_points: [
+            "Preconception upper cutoff is 4.0 mIU/L; first-trimester target narrows to 0.1–2.5 mIU/L.",
+            "Repeat TSH and free T4 testing confirms clinician-approved management.",
+          ],
+          disclaimer:
+            "Assistive de-identified explanation only — does not diagnose or prescribe. Final verification requires clinician approval.",
+          ai_metadata: {
+            mode: "openrouter",
+            provider: "openrouter",
+            model: "google/gemma-4-31b-it:free",
+            fallback_reason: null,
+          },
+          privacy_report: {
+            payload: {
+              residency_policy: "UAE_PHI_LOCAL_ONLY",
+              case_token: "ANON-CASE-1234ABCD",
+            },
+            redacted_fields: ["patient_id", "patient_name", "evidence_source"],
+            permitted_fields: ["case_token", "finding_title", "clinical_rationale"],
+            phi_check_passed: true,
+          },
+          audit_events: [
+            {
+              id: 9,
+              obligation_id: "OBL-101",
+              event_type: "AI_EXPLANATION_GENERATED",
+              actor: "AIExplainer (google/gemma-4-31b-it:free)",
+              summary: "Generated de-identified explanation for OBL-101 (0 PHI transmitted).",
+              created_at: "2026-11-20T10:35:00Z",
+            },
+            ...auditState,
+          ],
+        });
+      }
+
       return createJsonResponse({ detail: `Unhandled mock route: ${method} ${url}` }, 404);
     });
   });
@@ -1130,5 +1171,127 @@ describe("<ClinicalMetricVisualizer /> clinical range bars", () => {
     rerender(<ClinicalMetricVisualizer obligation={ferritinObl} />);
     expect(screen.getByRole("meter")).toHaveAttribute("aria-valuenow", "11");
     expect(screen.getByText("LOW")).toBeInTheDocument();
+  });
+});
+
+describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
+  it("opens floating AI Clinical Explainer from OBL-101 Explain button, plays SpeechSynthesis audio, and cancels on close", async () => {
+    const user = userEvent.setup();
+
+    const speakMock = vi.fn();
+    const cancelMock = vi.fn();
+    const pauseMock = vi.fn();
+    const resumeMock = vi.fn();
+    const getVoicesMock = vi.fn(() => [
+      { name: "Samantha", lang: "en-US" } as SpeechSynthesisVoice,
+    ]);
+
+    const prevSpeech = Object.getOwnPropertyDescriptor(window, "speechSynthesis");
+    const prevUtterance = (globalThis as { SpeechSynthesisUtterance?: unknown })
+      .SpeechSynthesisUtterance;
+
+    class MockUtterance {
+      text: string;
+      rate = 1;
+      pitch = 1;
+      voice: SpeechSynthesisVoice | null = null;
+      constructor(text: string) {
+        this.text = text;
+      }
+    }
+
+    Object.defineProperty(window, "speechSynthesis", {
+      configurable: true,
+      value: {
+        speak: speakMock,
+        cancel: cancelMock,
+        pause: pauseMock,
+        resume: resumeMock,
+        getVoices: getVoicesMock,
+      },
+    });
+    (globalThis as { SpeechSynthesisUtterance: unknown }).SpeechSynthesisUtterance = MockUtterance;
+
+    const obls = makeSeedObligations();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const pathname = new URL(url, "http://localhost").pathname;
+      const method = (init?.method ?? "GET").toUpperCase();
+
+      if (pathname === "/api/health") {
+        return createJsonResponse({
+          status: "ok",
+          residency_policy: "UAE_PHI_LOCAL_ONLY",
+          ai_provider: { provider: "openrouter", configured: true, model: "google/gemma-4-31b-it:free" },
+          database: { provider: "neon-postgres", connected: true, branch: "main", pooled: true, detail: "Connected" },
+        });
+      }
+      if (pathname === "/api/obligations") {
+        return createJsonResponse({ patient_id: "PAT-AE-4092", obligations: obls, audit_events: [] });
+      }
+      if (pathname === "/api/obligations/OBL-101/explain" && method === "POST") {
+        return createJsonResponse({
+          obligation_id: "OBL-101",
+          headline: "Elevated Thyroid-Stimulating Hormone (Preconception)",
+          explanation:
+            "TSH of 4.8 mIU/L sits above the 4.0 preconception upper limit and tightens below 2.5 in Trimester 1.",
+          key_points: ["Preconception cutoff is 4.0 mIU/L.", "Requires repeat TSH + free T4 review."],
+          disclaimer: "Assistive de-identified explanation only — does not diagnose or prescribe.",
+          ai_metadata: {
+            mode: "openrouter",
+            provider: "openrouter",
+            model: "google/gemma-4-31b-it:free",
+            fallback_reason: null,
+          },
+          privacy_report: {
+            payload: { residency_policy: "UAE_PHI_LOCAL_ONLY", case_token: "ANON-CASE-1234ABCD" },
+            redacted_fields: ["patient_name"],
+            permitted_fields: ["case_token"],
+            phi_check_passed: true,
+          },
+        });
+      }
+      return createJsonResponse({ detail: "Not mocked" }, 404);
+    });
+
+    try {
+      render(<PrototypeDemo onBackToTutorial={vi.fn()} />);
+      const main = screen.getByRole("main");
+      await within(main).findByText("Clinical Obligation Passport (2)");
+
+      await user.click(
+        within(main).getByRole("button", {
+          name: /Explain OBL-101: Subclinical Hypothyroidism Follow-up/i,
+        })
+      );
+
+      const explainer = await screen.findByRole("dialog", { name: /AI Clinical Explainer/i });
+      expect(
+        await within(explainer).findByText("Elevated Thyroid-Stimulating Hormone (Preconception)")
+      ).toBeInTheDocument();
+      expect(within(explainer).getByText("UAE Firewall · 0 PHI")).toBeInTheDocument();
+
+      await user.click(within(explainer).getByRole("button", { name: /Listen/i }));
+      expect(speakMock).toHaveBeenCalledTimes(1);
+      const spokenUtterance = speakMock.mock.calls[0][0] as MockUtterance;
+      expect(spokenUtterance.text).toContain("TSH of 4.8 mIU/L");
+      expect(spokenUtterance.rate).toBe(0.96);
+
+      await user.click(within(explainer).getByRole("button", { name: /Close AI explainer/i }));
+      expect(cancelMock).toHaveBeenCalled();
+      expect(screen.queryByRole("dialog", { name: /AI Clinical Explainer/i })).not.toBeInTheDocument();
+    } finally {
+      vi.restoreAllMocks();
+      if (prevSpeech) {
+        Object.defineProperty(window, "speechSynthesis", prevSpeech);
+      } else {
+        delete (window as unknown as { speechSynthesis?: unknown }).speechSynthesis;
+      }
+      if (prevUtterance !== undefined) {
+        (globalThis as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance = prevUtterance;
+      } else {
+        delete (globalThis as { SpeechSynthesisUtterance?: unknown }).SpeechSynthesisUtterance;
+      }
+    }
   });
 });

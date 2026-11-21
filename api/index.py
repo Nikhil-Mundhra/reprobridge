@@ -23,7 +23,12 @@ from api.db import (
     update_obligation,
 )
 from api.mcp_server import call_mcp_tool, handle_mcp_jsonrpc, list_mcp_tools
-from api.openrouter import DEFAULT_OPENROUTER_MODEL, stream_deidentified_brief
+from api.openrouter import (
+    DEFAULT_OPENROUTER_MODEL,
+    explain_deidentified_obligation,
+    stream_deidentified_brief,
+)
+from api.privacy import build_obligation_explain_payload
 from api.workflow import (
     apply_uae_privacy_firewall,
     detect_open_obligations,
@@ -526,6 +531,37 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
         "audit_events": _filter_audit_events(obls, patient_id),
         "patients": list_patient_summaries(),
         "cohort_totals": query_patients(limit=1)["cohort_totals"],
+    }
+
+
+@app.post("/api/obligations/{obligation_id}/explain")
+def explain_obligation(obligation_id: str):
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+
+    privacy_report = build_obligation_explain_payload(existing)
+    result = explain_deidentified_obligation(privacy_report["payload"])
+
+    append_audit_event(
+        event_type="AI_EXPLANATION_GENERATED",
+        actor=f"AIExplainer ({result['ai_metadata']['model']})",
+        summary=f"Generated de-identified explanation for {obligation_id} (0 PHI transmitted).",
+        obligation_id=obligation_id,
+    )
+    patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
+    obls = list_obligations(patient_id=patient_id)
+    return {
+        "obligation_id": obligation_id,
+        "headline": result["headline"],
+        "explanation": result["explanation"],
+        "key_points": result["key_points"],
+        "disclaimer": result["disclaimer"],
+        "ai_metadata": result["ai_metadata"],
+        "privacy_report": privacy_report,
+        "audit_events": _filter_audit_events(obls, patient_id),
     }
 
 

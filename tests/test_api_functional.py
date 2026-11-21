@@ -235,4 +235,19 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
     assert nadia_obl["status"] == "ESCALATED_FOR_REVIEW"
     assert nadia_obl["priority"] == "URGENT"
 
+    # Explain endpoint: returns de-identified clinical explanation & appends AI_EXPLANATION_GENERATED audit
+    explain_resp = client.post("/api/obligations/OBL-101/explain")
+    assert explain_resp.status_code == 200
+    ex = explain_resp.json()
+    assert ex["obligation_id"] == "OBL-101"
+    assert ex["headline"]
+    assert ex["explanation"]
+    assert isinstance(ex["key_points"], list) and len(ex["key_points"]) >= 2
+    assert ex["privacy_report"]["phi_check_passed"] is True
+    assert "Amina" not in json.dumps(ex["privacy_report"]["payload"])
+    assert any(ev["event_type"] == "AI_EXPLANATION_GENERATED" for ev in ex["audit_events"])
+
+    missing_explain = client.post("/api/obligations/OBL-999/explain")
+    assert missing_explain.status_code == 404
+
     client.post("/api/demo/reset")

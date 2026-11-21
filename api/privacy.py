@@ -138,6 +138,57 @@ def build_ai_safe_payload(
     }
 
 
+def _extract_forbidden_tokens(obligation: dict[str, Any]) -> list[str]:
+    """Collect identifying strings and sub-tokens from an obligation for strict scrubbing."""
+    tokens: list[str] = []
+    for field in ("patient_name", "patient_id", "verified_by"):
+        val = obligation.get(field)
+        if isinstance(val, str) and val.strip():
+            tokens.append(val.strip())
+            for part in val.replace("(", " ").replace(")", " ").split():
+                if len(part) >= 4 and part.lower() not in {"synthetic", "ob-gyn"}:
+                    tokens.append(part)
+    return tokens
+
+
+def build_obligation_explain_payload(obligation: dict[str, Any]) -> dict[str, Any]:
+    """Construct a zero-PHI single-obligation payload for assistive clinician/patient explanation."""
+    forbidden_tokens = _extract_forbidden_tokens(obligation)
+    deid = deidentify_obligation(obligation)
+    explained_obl = {
+        **deid,
+        "finding_title": scrub_text_phi(str(obligation.get("title", "")), forbidden_tokens),
+        "clinical_rationale": scrub_text_phi(
+            str(obligation.get("rationale", "")), forbidden_tokens
+        ),
+    }
+    payload = {
+        "residency_policy": "UAE_PHI_LOCAL_ONLY",
+        "case_token": deid["case_token"],
+        "obligation": explained_obl,
+    }
+
+    assert_phi_free(payload, forbidden_tokens=forbidden_tokens)
+
+    return {
+        "payload": payload,
+        "redacted_fields": sorted(PHI_FIELDS),
+        "permitted_fields": [
+            "case_token",
+            "obligation_id",
+            "life_stage",
+            "clinical_category",
+            "rule_version",
+            "priority",
+            "status",
+            "owner_specialty",
+            "finding_title",
+            "clinical_rationale",
+        ],
+        "phi_check_passed": True,
+    }
+
+
 def assert_phi_free(payload: Any, forbidden_tokens: list[str] | None = None) -> None:
     """Hard guardrail: raise PrivacyViolationError if any PHI appears in outbound data."""
     serialized = json.dumps(payload, default=str)

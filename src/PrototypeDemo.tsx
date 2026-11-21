@@ -5,6 +5,7 @@ import CareFlowAndPatientHeader from "./demo/CareFlowAndPatientHeader";
 import DemoTopBar from "./demo/DemoTopBar";
 import FhirExportModal from "./demo/FhirExportModal";
 import FloatingDocsTab from "./demo/FloatingDocsTab";
+import ObligationExplainerPopover from "./demo/ObligationExplainerPopover";
 import ObligationIntakeModal from "./demo/ObligationIntakeModal";
 import ObligationPassportSection from "./demo/ObligationPassportSection";
 import OrchestratorHarnessSection from "./demo/OrchestratorHarnessSection";
@@ -19,6 +20,7 @@ import type {
   CohortTotals,
   HealthResponse,
   Obligation,
+  ObligationExplanationResponse,
   PatientCohortSummary,
   PrivacyReport,
   PrototypeDemoProps,
@@ -88,6 +90,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [docsInitialId, setDocsInitialId] = useState<string | null>(null);
   const [docsPrefs, setDocsPrefs] = useState<DocsSessionPrefs>(() => readDocsSessionPrefs());
 
+  const [explainTarget, setExplainTarget] = useState<Obligation | null>(null);
+  const [explainLoading, setExplainLoading] = useState(false);
+  const [explainError, setExplainError] = useState<string | null>(null);
+  const [explainCache, setExplainCache] = useState<Record<string, ObligationExplanationResponse>>(
+    {}
+  );
+
   function openClinicalDocuments(docId?: string | null) {
     setDocsInitialId(docId ?? null);
     setDocsDrawerOpen(true);
@@ -140,8 +149,48 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setSafetyBlockFeedback({});
     setVerifyTarget(null);
     setShowFhirExportModal(false);
+    setExplainTarget(null);
+    setExplainError(null);
     setError(null);
     void loadData(patientId);
+  }
+
+  function getExplainCacheKey(obl: Obligation): string {
+    return `${obl.id}:${obl.life_stage}:${obl.status}`;
+  }
+
+  async function handleExplainObligation(obl: Obligation, forceRefresh = false) {
+    const cacheKey = getExplainCacheKey(obl);
+    setExplainTarget(obl);
+    setExplainError(null);
+    if (!forceRefresh && explainCache[cacheKey]) {
+      return;
+    }
+
+    setExplainLoading(true);
+    try {
+      const res = await fetch(`/api/obligations/${encodeURIComponent(obl.id)}/explain`, {
+        method: "POST",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.detail || `Explain request failed (HTTP ${res.status})`);
+      }
+      const explanationData = body as ObligationExplanationResponse;
+      setExplainCache((prev) => ({
+        ...prev,
+        [cacheKey]: explanationData,
+      }));
+      if (Array.isArray(explanationData.audit_events)) {
+        setAuditEvents(explanationData.audit_events);
+      }
+    } catch (err) {
+      setExplainError(
+        err instanceof Error ? err.message : "Unable to generate AI explanation."
+      );
+    } finally {
+      setExplainLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -310,6 +359,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
     setPrivacyReport(null);
     setSafetyBlockFeedback({});
     setShowFhirExportModal(false);
+    setExplainTarget(null);
+    setExplainError(null);
+    setExplainCache({});
     setTrace([]);
     setError(null);
     try {
@@ -444,6 +496,10 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           onOpenFhirExport={() => setShowFhirExportModal(true)}
           onOpenIntakeModal={() => setShowIntakeModal(true)}
           onOpenClinicalDocument={(docId) => openClinicalDocuments(docId)}
+          onExplainObligation={(obl) => {
+            void handleExplainObligation(obl);
+          }}
+          explainingId={explainLoading ? explainTarget?.id ?? null : null}
         />
 
         <AuditGovernanceSection
@@ -503,6 +559,21 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           setDocsPrefs((prev) => ({ ...prev, side, yRatio }))
         }
         onOpen={() => openClinicalDocuments()}
+      />
+
+      {/* Floating Zero-PHI AI Explainer with Browser Speech Audio */}
+      <ObligationExplainerPopover
+        obligation={explainTarget}
+        data={explainTarget ? explainCache[getExplainCacheKey(explainTarget)] ?? null : null}
+        loading={explainLoading}
+        error={explainError}
+        onRetry={() => {
+          if (explainTarget) void handleExplainObligation(explainTarget, true);
+        }}
+        onClose={() => {
+          setExplainTarget(null);
+          setExplainError(null);
+        }}
       />
 
       {/* Clinician-Only Clinical Documents Side Drawer (Zero AI Egress) */}

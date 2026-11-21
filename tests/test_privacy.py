@@ -7,6 +7,7 @@ from api.privacy import (
     PrivacyViolationError,
     assert_phi_free,
     build_ai_safe_payload,
+    build_obligation_explain_payload,
     deidentify_obligation,
     pseudonymize_patient_id,
     scrub_text_phi,
@@ -74,3 +75,21 @@ def test_build_ai_safe_payload_contains_zero_phi():
 def test_assert_phi_free_blocks_phi_leaks(bad_payload):
     with pytest.raises(PrivacyViolationError):
         assert_phi_free(bad_payload)
+
+
+def test_build_obligation_explain_payload_scrubs_phi_and_passes_firewall():
+    dirty_obl = {
+        **SEED_OBLIGATIONS[0],
+        "rationale": (
+            "Patient Amina Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, "
+            "phone +971 50 123 4567, email amina@example.ae showed TSH 4.8 mIU/L."
+        ),
+    }
+    report = build_obligation_explain_payload(dirty_obl)
+    assert report["phi_check_passed"] is True
+    assert_phi_free(report["payload"])
+
+    serialized = json.dumps(report["payload"])
+    for leaked in ("Amina", "Al-Mansoori", "PAT-AE-4092", "784-1992-1234567-1", "amina@example.ae", "+971 50 123 4567"):
+        assert leaked not in serialized
+    assert "4.8 mIU/L" in serialized

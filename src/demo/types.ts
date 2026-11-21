@@ -124,3 +124,14 @@ export interface CohortTotals {
   total_deferred: number;
   total_closed: number;
 }
+
+export interface ObligationExplanationResponse {
+  obligation_id: string;
+  headline: string;
+  explanation: string;
+  key_points: string[];
+  disclaimer: string;
+  ai_metadata: AiMetadata;
+  privacy_report: PrivacyReport;
+  audit_events?: AuditEvent[];
+}

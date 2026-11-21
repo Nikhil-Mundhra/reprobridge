@@ -9,6 +9,7 @@ import {
   Lock,
   Send,
   ShieldAlert,
+  Sparkles,
   Upload,
   X,
 } from "lucide-react";
@@ -34,6 +35,8 @@ interface ObligationPassportSectionProps {
   onOpenFhirExport: () => void;
   onOpenIntakeModal: () => void;
   onOpenClinicalDocument: (docId: string) => void;
+  onExplainObligation: (obl: Obligation) => void;
+  explainingId?: string | null;
 }
 
 export default function ObligationPassportSection({
@@ -48,6 +51,8 @@ export default function ObligationPassportSection({
   onOpenFhirExport,
   onOpenIntakeModal,
   onOpenClinicalDocument,
+  onExplainObligation,
+  explainingId,
 }: ObligationPassportSectionProps) {
   const [expandedFhirId, setExpandedFhirId] = useState<string | null>(null);
 
@@ -226,6 +231,16 @@ export default function ObligationPassportSection({
             </dl>
 
             <div className="mt-3 flex flex-wrap items-center gap-4">
+              <button
+                type="button"
+                onClick={() => onExplainObligation(obl)}
+                disabled={explainingId === obl.id}
+                aria-label={`Explain ${obl.id}: ${obl.title}`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-teal-200 bg-teal-50/80 px-2.5 py-1 text-xs font-semibold text-teal-800 transition hover:bg-teal-100 disabled:opacity-60"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
+                {explainingId === obl.id ? "Explaining…" : "Explain"}
+              </button>
               <button
                 type="button"
                 onClick={() => onOpenClinicalDocument(getDefaultDocIdForObligation(obl.id))}

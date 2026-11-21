@@ -49,6 +49,22 @@ STREAM_SYSTEM_PROMPT = (
     "Do not output JSON, markdown fences, or extra headings."
 )
 
+EXPLAIN_SYSTEM_PROMPT = (
+    "You are ReproBridge's assistive clinical-finding explainer. "
+    "You receive ONLY de-identified obligation metadata (never PHI). "
+    "You do NOT diagnose or prescribe; all clinical decisions require clinician sign-off. "
+    "Write in clear, calm, spoken-friendly prose with no markdown syntax, asterisks, or emojis. "
+    "Return valid JSON with exactly three keys: "
+    "'headline' (short plain summary under 12 words), "
+    "'explanation' (2 to 3 smooth sentences explaining the lab or preventive finding, why the target range matters at this life stage, and the follow-up step), and "
+    "'key_points' (array of 2 to 3 concise plain-text takeaway sentences)."
+)
+
+_EXPLAIN_DISCLAIMER = (
+    "Assistive de-identified explanation only — does not diagnose or prescribe. "
+    "Final verification requires clinician approval."
+)
+
 
 def _deterministic_fallback(payload: dict[str, Any], reason: str) -> dict[str, Any]:
     obligations = payload.get("obligations", [])
@@ -300,3 +316,187 @@ def stream_deidentified_brief(
             reason=f"OpenRouter stream unavailable ({type(exc).__name__})",
         )
         yield {"type": "done", "result": fb}
+
+
+def _deterministic_explain_fallback(
+    deidentified_payload: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    obl = deidentified_payload.get("obligation") or {}
+    category = str(obl.get("clinical_category", "preventive_reproductive_followup"))
+    life_stage = str(obl.get("life_stage", "Preconception"))
+    status = str(obl.get("status", "OPEN"))
+    owner = str(obl.get("owner_specialty", "OB-GYN / Primary Care"))
+    title = str(obl.get("finding_title", "Clinical Follow-up Finding")).strip()
+    rationale = str(obl.get("clinical_rationale", "")).strip()
+
+    category_copy: dict[str, tuple[str, str, list[str]]] = {
+        "subclinical_hypothyroidism_tsh_followup": (
+            f"Elevated Thyroid-Stimulating Hormone ({life_stage})",
+            (
+                "Preconception or early-pregnancy TSH levels above target can strain maternal thyroid reserve, "
+                "especially because the first-trimester therapeutic window narrows to below 2.5 milli-international units per liter. "
+                f"Under {owner} oversight, repeat TSH and free T4 testing confirms whether clinician-approved titration is needed before closure."
+            ),
+            [
+                "Preconception reference is up to 4.0 mIU/L, tightening to 0.1–2.5 mIU/L in Trimester 1.",
+                f"Current workflow status is {status} with {owner} coordinating lab verification.",
+                "Requires repeat TSH and free T4 lab evidence plus clinician sign-off before closure.",
+            ],
+        ),
+        "live_vaccine_non_immune_deferral": (
+            f"Live-Vaccine Immunity Gap ({life_stage})",
+            (
+                "Non-immune serology leaves the patient vulnerable to preventable infection during pregnancy, "
+                "yet live-attenuated vaccines such as MMR or Varicella are strictly contraindicated once pregnant. "
+                "ReproBridge keeps this obligation open and automatically defers immunization to the pre-discharge postpartum pathway."
+            ),
+            [
+                "Live-attenuated vaccines cannot be safely administered during pregnancy.",
+                f"Obligation remains tracked in {status} state so postpartum immunization is never dropped.",
+                "Eligible for clinician-verified closure only after pregnancy completes.",
+            ],
+        ),
+        "gestational_dysglycemia_ogtt_followup": (
+            f"Preconception Dysglycemia & Glucose Monitoring ({life_stage})",
+            (
+                "Borderline fasting glucose or HbA1c before conception raises the likelihood of gestational diabetes "
+                "as placental insulin resistance increases. Early oral glucose tolerance testing allows the endocrinology "
+                f"and {owner} teams to intervene promptly when thresholds shift."
+            ),
+            [
+                "Standard preconception fasting glucose target is under 100 mg/dL and HbA1c under 5.7%.",
+                "Pregnancy tightens fasting glycemic targets below 95 mg/dL to protect fetal growth.",
+                "Requires formal OGTT confirmation and clinician-approved management review.",
+            ],
+        ),
+        "preeclampsia_aspirin_prophylaxis_window": (
+            f"Preeclampsia Risk & Prophylaxis Timing ({life_stage})",
+            (
+                "Elevated baseline blood pressure combined with obstetric history indicates a time-sensitive window "
+                "for preventive maternal-fetal follow-up. Guidelines emphasize evaluating low-dose aspirin prophylaxis "
+                "between 12 and 16 weeks gestation before spiral-artery remodeling completes."
+            ),
+            [
+                "Prophylaxis evaluation window sits between 12 and 16 weeks of pregnancy.",
+                "Baseline blood pressure readings are tracked against standard (<120/80) and preeclampsia (>=140/90) cutoffs.",
+                f"Coordinated by {owner} pending clinician order verification.",
+            ],
+        ),
+        "hpv_series_postpartum_completion": (
+            f"Incomplete HPV Immunization Series ({life_stage})",
+            (
+                "The HPV 9-valent vaccine series remains incomplete, leaving partial protection until remaining doses "
+                "are administered. Routine HPV vaccination is deferred during pregnancy and resumed smoothly in the "
+                "postpartum clinic so the multi-dose series finishes safely."
+            ),
+            [
+                "Routine HPV vaccination is postponed during pregnancy without restarting prior doses.",
+                f"Current tracking status ({status}) carries remaining dose history into postpartum care.",
+                "Closes once remaining series doses are documented and verified.",
+            ],
+        ),
+    }
+
+    if category in category_copy:
+        headline, explanation, key_points = category_copy[category]
+    else:
+        headline = title[:90] or f"Clinical Follow-up Explanation ({life_stage})"
+        explanation = (
+            f"{rationale} " if rationale else ""
+        ) + f"ReproBridge keeps this obligation tracked under {life_stage} care with {owner} until qualifying clinical evidence is verified."
+        key_points = [
+            f"Current life stage: {life_stage} (Status: {status}).",
+            f"Care coordination owner: {owner}.",
+            "Requires verified clinical evidence and clinician sign-off before closure.",
+        ]
+
+    return {
+        "headline": headline,
+        "explanation": explanation.strip(),
+        "key_points": key_points,
+        "disclaimer": _EXPLAIN_DISCLAIMER,
+        "ai_metadata": {
+            "mode": "deterministic_fallback",
+            "provider": "local-deterministic",
+            "model": "none",
+            "fallback_reason": reason,
+        },
+    }
+
+
+def explain_deidentified_obligation(
+    deidentified_payload: dict[str, Any],
+    *,
+    timeout_seconds: float = 18.0,
+) -> dict[str, Any]:
+    """Generate a plain-language, spoken-friendly explanation from a zero-PHI obligation payload."""
+    assert_phi_free(deidentified_payload)
+
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    primary_model, fallback_chain = _get_model_config()
+
+    if not api_key:
+        return _deterministic_explain_fallback(
+            deidentified_payload,
+            reason="OPENROUTER_API_KEY not configured",
+        )
+
+    headers = _build_headers(api_key)
+    request_body = {
+        "model": primary_model,
+        "models": fallback_chain,
+        "temperature": 0.2,
+        "max_tokens": 450,
+        "reasoning": {"effort": "none"},
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": EXPLAIN_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Explain this de-identified clinical obligation clearly for clinicians and patients "
+                    f"(0 PHI):\n{json.dumps(deidentified_payload, indent=2)}"
+                ),
+            },
+        ],
+    }
+
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(OPENROUTER_API_URL, headers=headers, json=request_body)
+            response.raise_for_status()
+            data = response.json()
+
+        raw_content = str(data["choices"][0]["message"]["content"]).strip()
+        if raw_content.startswith("```"):
+            raw_content = raw_content.strip("`").removeprefix("json").strip()
+        parsed = json.loads(raw_content)
+        headline = str(parsed.get("headline", "")).strip()
+        explanation = str(parsed.get("explanation", "")).strip()
+        raw_points = parsed.get("key_points") or []
+        key_points = [str(item).strip() for item in raw_points if str(item).strip()][:4]
+
+        if not headline or not explanation:
+            return _deterministic_explain_fallback(
+                deidentified_payload,
+                reason="Incomplete JSON fields from OpenRouter",
+            )
+
+        return {
+            "headline": headline,
+            "explanation": explanation,
+            "key_points": key_points,
+            "disclaimer": _EXPLAIN_DISCLAIMER,
+            "ai_metadata": {
+                "mode": "openrouter",
+                "provider": "openrouter",
+                "model": str(data.get("model", primary_model)),
+                "fallback_reason": None,
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _deterministic_explain_fallback(
+            deidentified_payload,
+            reason=f"OpenRouter unavailable ({type(exc).__name__})",
+        )
