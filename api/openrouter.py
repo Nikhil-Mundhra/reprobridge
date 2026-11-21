@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 
 from api.privacy import assert_phi_free
 
-load_dotenv(".env.local")
 load_dotenv(".env")
+load_dotenv(".env.local")
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
