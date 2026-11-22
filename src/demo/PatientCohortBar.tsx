@@ -58,7 +58,7 @@ export default function PatientCohortBar({
   const activePatient = patients[activeIdx] ?? patients[0];
   const activePatientId = activePatient?.patient_id ?? selectedPatientId;
   const compactName = formatCompactPatientName(
-    activePatient?.patient_name ?? "Amina Al-Mansoori (Synthetic)"
+    activePatient?.patient_name ?? "Amira Al-Mansoori (Synthetic)"
   );
   const hasMultiple = patients.length > 1;
 

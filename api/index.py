@@ -446,7 +446,7 @@ def import_obligations(body: ObligationImportRequest):
     for item in body.obligations:
         pid = (item.patient_id or target_pid).strip() or target_pid
         patient_name = (item.patient_name or "").strip() or str(
-            PATIENT_COHORT_META.get(pid, {}).get("patient_name", "Amina Al-Mansoori (Synthetic)")
+            PATIENT_COHORT_META.get(pid, {}).get("patient_name", "Amira Al-Mansoori (Synthetic)")
         )
         same_patient_existing = [o for o in current + created if o.get("patient_id") == pid]
         reserved_ids = {str(o.get("id", "")) for o in all_existing + created}

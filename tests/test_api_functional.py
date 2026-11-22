@@ -37,7 +37,7 @@ def test_full_six_step_functional_flow(monkeypatch):
     assert tj["trace"][1]["execution"] == "deterministic"
     assert tj["trace"][2]["execution"] == "deterministic"
     assert tj["privacy_report"]["phi_check_passed"] is True
-    assert "Amina" not in json.dumps(tj["privacy_report"]["payload"])
+    assert "Amira" not in json.dumps(tj["privacy_report"]["payload"])
     assert tj["specialist_handoff"]
 
     by_id = {o["id"]: o for o in tj["obligations"]}
@@ -246,7 +246,7 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
     assert ex["explanation"]
     assert isinstance(ex["key_points"], list) and len(ex["key_points"]) >= 2
     assert ex["privacy_report"]["phi_check_passed"] is True
-    assert "Amina" not in json.dumps(ex["privacy_report"]["payload"])
+    assert "Amira" not in json.dumps(ex["privacy_report"]["payload"])
     assert any(ev["event_type"] == "AI_EXPLANATION_GENERATED" for ev in ex["audit_events"])
 
     missing_explain = client.post("/api/obligations/OBL-999/explain")
@@ -287,13 +287,13 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
 
     audio_resp = client.post(
         "/api/obligations/OBL-101/explain/audio",
-        json={"text": "Amina Al-Mansoori (PAT-AE-4092) has elevated TSH 4.8 mIU/L."},
+        json={"text": "Amira Al-Mansoori (PAT-AE-4092) has elevated TSH 4.8 mIU/L."},
     )
     assert audio_resp.status_code == 200
     assert audio_resp.headers["content-type"].startswith("audio/mpeg")
     assert audio_resp.content == b"ID3-FAKE-ELEVENLABS-MP3"
     assert len(captured_tts) == 1
-    assert "Amina" not in captured_tts[0]
+    assert "Amira" not in captured_tts[0]
     assert "PAT-AE-4092" not in captured_tts[0]
     assert "4.8 mIU/L" in captured_tts[0]
 
@@ -312,7 +312,7 @@ def test_patient_reconciliation_questionnaire_and_submit(monkeypatch):
     q_data = q_resp.json()
     assert q_data["patient_id"] == "PAT-AE-4092"
     assert q_data["privacy_report"]["phi_check_passed"] is True
-    assert "Amina" not in json.dumps(q_data["privacy_report"]["payload"])
+    assert "Amira" not in json.dumps(q_data["privacy_report"]["payload"])
     assert "PAT-AE-4092" not in json.dumps(q_data["privacy_report"]["payload"])
     assert len(q_data["questions"]) == 3
     assert q_data["questions"][0]["id"] == "pregnancy_stage"

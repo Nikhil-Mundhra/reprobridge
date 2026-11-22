@@ -26,15 +26,15 @@ def test_pseudonymize_is_deterministic_and_hides_raw_id():
 
 def test_scrub_text_phi_redacts_uae_identifiers():
     raw = (
-        "Patient Amina Al-Mansoori (PAT-AE-4092), Emirates ID 784-1992-1234567-1, "
-        "phone +971 50 123 4567, email amina@example.ae."
+        "Patient Amira Al-Mansoori (PAT-AE-4092), Emirates ID 784-1992-1234567-1, "
+        "phone +971 50 123 4567, email amira@example.ae."
     )
-    scrubbed = scrub_text_phi(raw, extra_forbidden=["Amina", "Al-Mansoori"])
+    scrubbed = scrub_text_phi(raw, extra_forbidden=["Amira", "Al-Mansoori"])
     assert "784-1992-1234567-1" not in scrubbed
     assert "PAT-AE-4092" not in scrubbed
     assert "+971 50 123 4567" not in scrubbed
-    assert "amina@example.ae" not in scrubbed
-    assert "Amina" not in scrubbed
+    assert "amira@example.ae" not in scrubbed
+    assert "Amira" not in scrubbed
     assert "Al-Mansoori" not in scrubbed
 
 
@@ -57,7 +57,7 @@ def test_build_ai_safe_payload_contains_zero_phi():
     serialized = json.dumps(report["payload"])
     assert report["phi_check_passed"] is True
     assert report["payload"]["residency_policy"] == "UAE_PHI_LOCAL_ONLY"
-    assert "Amina" not in serialized
+    assert "Amira" not in serialized
     assert "Al-Mansoori" not in serialized
     assert "PAT-AE-4092" not in serialized
     assert "Malaffi" not in serialized
@@ -66,7 +66,7 @@ def test_build_ai_safe_payload_contains_zero_phi():
 @pytest.mark.parametrize(
     "bad_payload",
     [
-        {"patient_name": "Amina"},
+        {"patient_name": "Amira"},
         {"note": "Emirates ID 784-1990-7654321-9"},
         {"note": "Contact +971-50-987-6543"},
         {"note": "Email test@clinic.ae"},
@@ -82,8 +82,8 @@ def test_build_obligation_explain_payload_scrubs_phi_and_passes_firewall():
     dirty_obl = {
         **SEED_OBLIGATIONS[0],
         "rationale": (
-            "Patient Amina Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, "
-            "phone +971 50 123 4567, email amina@example.ae showed TSH 4.8 mIU/L."
+            "Patient Amira Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, "
+            "phone +971 50 123 4567, email amira@example.ae showed TSH 4.8 mIU/L."
         ),
     }
     report = build_obligation_explain_payload(dirty_obl)
@@ -92,11 +92,11 @@ def test_build_obligation_explain_payload_scrubs_phi_and_passes_firewall():
 
     serialized = json.dumps(report["payload"])
     for leaked in (
-        "Amina",
+        "Amira",
         "Al-Mansoori",
         "PAT-AE-4092",
         "784-1992-1234567-1",
-        "amina@example.ae",
+        "amira@example.ae",
         "+971 50 123 4567",
     ):
         assert leaked not in serialized
@@ -105,10 +105,10 @@ def test_build_obligation_explain_payload_scrubs_phi_and_passes_firewall():
 
 def test_scrub_explanation_for_tts_redacts_phi_before_audio_egress():
     raw_text = (
-        "Amina Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, shows elevated TSH 4.8 mIU/L."
+        "Amira Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, shows elevated TSH 4.8 mIU/L."
     )
     scrubbed = scrub_explanation_for_tts(raw_text, SEED_OBLIGATIONS[0])
-    for leaked in ("Amina", "Al-Mansoori", "PAT-AE-4092", "784-1992-1234567-1"):
+    for leaked in ("Amira", "Al-Mansoori", "PAT-AE-4092", "784-1992-1234567-1"):
         assert leaked not in scrubbed
     assert "4.8 mIU/L" in scrubbed
 

@@ -6,7 +6,7 @@ Guidance for AI coding agents working in the **ReproBridge** repository.
 
 **ReproBridge** is a continuous, proactive, evidence-verified reproductive and preventive care coordination platform (built for the Ajyal Hackathon — Women's Health theme, Abu Dhabi DoH / Upstart Bo, aligned with Abu Dhabi's *Programme for the Future of Reproductive Health 2030*).
 
-It demonstrates a longitudinal **Preconception → Pregnancy → Postpartum** synthetic patient journey (`PAT-AE-4092`, Amina Al-Mansoori — Synthetic) backed by:
+It demonstrates a longitudinal **Preconception → Pregnancy → Postpartum** synthetic patient journey (`PAT-AE-4092`, Amira Al-Mansoori — Synthetic) backed by:
 - Deterministic, version-controlled clinical transition rules
 - A **Clinical Obligation Passport** with incoming FHIR/HIE clinical evidence and clinician sign-off
 - A **UAE PHI De-Identification Firewall** (`UAE_PHI_LOCAL_ONLY`) gating all external LLM calls

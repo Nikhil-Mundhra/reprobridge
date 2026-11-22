@@ -285,7 +285,7 @@ export function buildOutboundFhirBundle(
 ): Record<string, unknown> {
   const patient = obligations[0];
   const patientId = patient?.patient_id ?? "PAT-AE-4092";
-  const patientName = patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)";
+  const patientName = patient?.patient_name ?? "Amira Al-Mansoori (Synthetic)";
   const timestamp = new Date().toISOString();
   const handoffItems = handoffText ? parseHandoffItems(handoffText) : [];
 

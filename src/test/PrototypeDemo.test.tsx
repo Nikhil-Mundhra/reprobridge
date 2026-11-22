@@ -32,7 +32,7 @@ function makeSeedObligations(): Obligation[] {
     {
       id: "OBL-101",
       patient_id: "PAT-AE-4092",
-      patient_name: "Amina Al-Mansoori (Synthetic)",
+      patient_name: "Amira Al-Mansoori (Synthetic)",
       life_stage: "Preconception",
       title: "Subclinical Hypothyroidism Follow-up (TSH 4.8 mIU/L)",
       rationale:
@@ -48,7 +48,7 @@ function makeSeedObligations(): Obligation[] {
     {
       id: "OBL-102",
       patient_id: "PAT-AE-4092",
-      patient_name: "Amina Al-Mansoori (Synthetic)",
+      patient_name: "Amira Al-Mansoori (Synthetic)",
       life_stage: "Preconception",
       title: "Rubella IgG Non-Immune Vaccination Verification",
       rationale:
@@ -655,7 +655,7 @@ describe("<PrototypeDemo /> component workflows", () => {
         const added = body.obligations.map((item, idx) => ({
           id: `OBL-${103 + idx}`,
           patient_id: targetPid,
-          patient_name: "Amina Al-Mansoori (Synthetic)",
+          patient_name: "Amira Al-Mansoori (Synthetic)",
           life_stage: item.life_stage ?? "Preconception",
           title: item.title,
           rationale: item.rationale,
@@ -732,7 +732,7 @@ describe("<PrototypeDemo /> component workflows", () => {
     render(<PrototypeDemo onBackToTutorial={onBackToTutorial} />);
 
     const main = screen.getByRole("main");
-    expect(await within(main).findByText(/Amina Al-Mansoori \(Synthetic\)/)).toBeInTheDocument();
+    expect(await within(main).findByText(/Amira Al-Mansoori \(Synthetic\)/)).toBeInTheDocument();
     expect(within(main).getByText("PAT-AE-4092")).toBeInTheDocument();
     expect(within(main).getByText("Preconception")).toBeInTheDocument();
     expect(screen.getByText("UAE Local · Live")).toBeInTheDocument();
@@ -819,7 +819,7 @@ describe("<PrototypeDemo /> component workflows", () => {
     ).toBeInTheDocument();
 
     // Option B layout order: Patient/Value-Prop Header -> Obligation Passport -> Care-Site Spine -> Harness
-    const patientHeading = within(main).getByText(/Amina Al-Mansoori \(Synthetic\)/);
+    const patientHeading = within(main).getByText(/Amira Al-Mansoori \(Synthetic\)/);
     const passportHeading = within(main).getByText("Clinical Obligation Passport (2)");
     const spineHeading = within(main).getByText(
       "Cross-System Care Continuity Spine (1 Patient · 3 Disconnected EMRs)"
@@ -939,11 +939,11 @@ describe("<PrototypeDemo /> component workflows", () => {
     expect(nextBtn.compareDocumentPosition(switchBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     // Compact switcher omits clinical track, life-stage badge, and (Synthetic) suffix
-    expect(within(switchBtn).getByText("Amina Al-Mansoori")).toBeInTheDocument();
+    expect(within(switchBtn).getByText("Amira Al-Mansoori")).toBeInTheDocument();
     expect(within(cohortStrip).queryByText(/Endocrine & Rubella Continuity/i)).not.toBeInTheDocument();
     expect(within(cohortStrip).queryByText(/\(Synthetic\)/i)).not.toBeInTheDocument();
 
-    // Step forward to Fatima (2/N) and back to Amina (1/N)
+    // Step forward to Fatima (2/N) and back to Amira (1/N)
     await user.click(nextBtn);
     expect(await within(cohortStrip).findByText(`2/${cohortTotal}`)).toBeInTheDocument();
     const main = screen.getByRole("main");
@@ -951,13 +951,13 @@ describe("<PrototypeDemo /> component workflows", () => {
 
     await user.click(prevBtn);
     expect(await within(cohortStrip).findByText(`1/${cohortTotal}`)).toBeInTheDocument();
-    expect(await within(main).findByText(/Amina Al-Mansoori \(Synthetic\)/)).toBeInTheDocument();
+    expect(await within(main).findByText(/Amira Al-Mansoori \(Synthetic\)/)).toBeInTheDocument();
 
     // Open searchable/sortable Population Registry dialog
     await user.click(within(cohortStrip).getByRole("button", { name: /Switch patient/i }));
     const registry = await screen.findByRole("dialog", { name: /Population Registry/i });
 
-    expect(within(registry).getByText("Amina Al-Mansoori (Synthetic)")).toBeInTheDocument();
+    expect(within(registry).getByText("Amira Al-Mansoori (Synthetic)")).toBeInTheDocument();
     expect(within(registry).getByText("Fatima Al-Zaabi (Synthetic)")).toBeInTheDocument();
     expect(within(registry).getByText("Sara Al-Nuaimi (Synthetic)")).toBeInTheDocument();
 
@@ -1539,7 +1539,7 @@ describe("<PatientSearchOnboarding /> & Tutorial -> Search -> AI Reconciliation 
           patients: [
             {
               patient_id: "PAT-AE-4092",
-              patient_name: "Amina Al-Mansoori (Synthetic)",
+              patient_name: "Amira Al-Mansoori (Synthetic)",
               age_sex: "32Y · F",
               clinical_track: "Endocrine & Rubella Continuity",
               facility_a: "Mubadala Primary Care",
@@ -1735,11 +1735,11 @@ describe("<PatientSearchOnboarding /> & Tutorial -> Search -> AI Reconciliation 
     ).toBeInTheDocument();
     expect(window.location.hash).toBe("#search");
 
-    // 2. Search narrows cohort to Amina, then click Select Patient & Reconcile
+    // 2. Search narrows cohort to Amira, then click Select Patient & Reconcile
     const searchInput = screen.getByRole("searchbox", {
       name: /Search patients by name, MRN, track, or facility/i,
     });
-    await user.type(searchInput, "Amina");
+    await user.type(searchInput, "Amira");
     expect(screen.queryByText(/Fatima Al-Zaabi \(Synthetic\)/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Select Patient & Reconcile/i }));

@@ -841,7 +841,7 @@ export default function OrchestratorHarnessSection({
                     <li className="flex flex-wrap items-center justify-between gap-2 rounded bg-rose-50/70 px-2.5 py-1">
                       <span className="text-slate-500">patient_name</span>
                       <span className="text-rose-700 line-through">
-                        {patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)"}
+                        {patient?.patient_name ?? "Amira Al-Mansoori (Synthetic)"}
                       </span>
                     </li>
                     <li className="flex flex-wrap items-center justify-between gap-2 rounded bg-rose-50/70 px-2.5 py-1">

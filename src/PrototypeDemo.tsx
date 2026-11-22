@@ -564,7 +564,7 @@ export default function PrototypeDemo({
       }
     : undefined);
   const activePatientName =
-    patient?.patient_name ?? selectedPatientMeta?.patient_name ?? "Amina Al-Mansoori (Synthetic)";
+    patient?.patient_name ?? selectedPatientMeta?.patient_name ?? "Amira Al-Mansoori (Synthetic)";
   const isPostpartum = obligations.some((o) => o.life_stage === "Postpartum");
   const isAntenatal =
     !isPostpartum && obligations.some((o) => o.life_stage.startsWith("Antenatal"));

@@ -22,7 +22,7 @@ def test_openrouter_fallback_when_api_key_missing(monkeypatch):
 def test_openrouter_blocks_phi_before_network_call(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key")
     with pytest.raises(PrivacyViolationError):
-        synthesize_deidentified_brief({"patient_name": "Amina Al-Mansoori"})
+        synthesize_deidentified_brief({"patient_name": "Amira Al-Mansoori"})
 
 
 def test_openrouter_success_with_mocked_http(monkeypatch):
@@ -63,7 +63,7 @@ def test_openrouter_success_with_mocked_http(monkeypatch):
     assert captured["headers"]["Authorization"] == "Bearer sk-or-test-key"
     # Verify outbound HTTP body sent to OpenRouter contains zero PHI.
     outbound_str = json.dumps(captured["body"])
-    assert "Amina" not in outbound_str
+    assert "Amira" not in outbound_str
     assert "PAT-AE-4092" not in outbound_str
 
 

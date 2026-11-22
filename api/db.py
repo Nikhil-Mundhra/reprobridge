@@ -148,7 +148,7 @@ def get_direct_engine() -> Engine | None:
 PATIENT_COHORT_META: dict[str, dict[str, Any]] = {
     "PAT-AE-4092": {
         "patient_id": "PAT-AE-4092",
-        "patient_name": "Amina Al-Mansoori (Synthetic)",
+        "patient_name": "Amira Al-Mansoori (Synthetic)",
         "age_sex": "32Y · F",
         "clinical_track": "Endocrine & Rubella Continuity",
         "facility_a": "Mubadala Primary Care",
@@ -197,7 +197,7 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
     {
         "id": "OBL-101",
         "patient_id": "PAT-AE-4092",
-        "patient_name": "Amina Al-Mansoori (Synthetic)",
+        "patient_name": "Amira Al-Mansoori (Synthetic)",
         "life_stage": "Preconception",
         "title": "Subclinical Hypothyroidism Follow-up (TSH 4.8 mIU/L)",
         "rationale": (
@@ -222,7 +222,7 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
     {
         "id": "OBL-102",
         "patient_id": "PAT-AE-4092",
-        "patient_name": "Amina Al-Mansoori (Synthetic)",
+        "patient_name": "Amira Al-Mansoori (Synthetic)",
         "life_stage": "Preconception",
         "title": "Rubella IgG Non-Immune Vaccination Verification",
         "rationale": (
@@ -663,6 +663,12 @@ def ensure_schema_and_seed() -> None:
     with direct_engine.begin() as conn:
         for ddl in _OBLIGATION_MIGRATION_DDL:
             conn.execute(text(ddl))
+        conn.execute(
+            obligations_table.update()
+            .where(obligations_table.c.patient_id == "PAT-AE-4092")
+            .where(obligations_table.c.patient_name != "Amira Al-Mansoori (Synthetic)")
+            .values(patient_name="Amira Al-Mansoori (Synthetic)")
+        )
         existing_ids = {row[0] for row in conn.execute(select(obligations_table.c.id)).all()}
         missing_obls = [
             {**_OBLIGATION_OPTIONAL_DEFAULTS, **item, "updated_at": now}
@@ -1093,7 +1099,7 @@ def create_obligation(item: dict[str, Any]) -> dict[str, Any]:
     record = {
         "id": item["id"],
         "patient_id": item.get("patient_id") or "PAT-AE-4092",
-        "patient_name": item.get("patient_name") or "Amina Al-Mansoori (Synthetic)",
+        "patient_name": item.get("patient_name") or "Amira Al-Mansoori (Synthetic)",
         "life_stage": item.get("life_stage") or "Preconception",
         "title": item["title"],
         "rationale": item["rationale"],

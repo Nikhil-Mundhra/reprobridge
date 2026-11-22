@@ -26,7 +26,7 @@ def test_mcp_get_deidentified_obligations_strips_phi(monkeypatch):
     serialized = json.dumps(res)
     assert res["residency_policy"] == "UAE_PHI_LOCAL_ONLY"
     assert res["count"] >= 2
-    assert "Amina" not in serialized
+    assert "Amira" not in serialized
     assert "PAT-AE-4092" not in serialized
     assert "Malaffi" not in serialized
 

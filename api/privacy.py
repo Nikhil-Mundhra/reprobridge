@@ -183,7 +183,7 @@ def build_ai_safe_payload(
             val = obl.get(field)
             if isinstance(val, str) and val.strip():
                 forbidden_tokens.append(val.strip())
-                # Also block individual name parts (e.g. "Amina", "Al-Mansoori")
+                # Also block individual name parts (e.g. "Amira", "Al-Mansoori")
                 for part in val.replace("(", " ").replace(")", " ").split():
                     if len(part) >= 4 and part.lower() not in {"synthetic", "ob-gyn"}:
                         forbidden_tokens.append(part)

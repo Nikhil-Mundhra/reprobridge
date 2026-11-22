@@ -3,7 +3,7 @@ import type { FacilityStage, PatientCohortSummary } from "./types";
 export const DEFAULT_PATIENT_COHORT: PatientCohortSummary[] = [
   {
     patient_id: "PAT-AE-4092",
-    patient_name: "Amina Al-Mansoori (Synthetic)",
+    patient_name: "Amira Al-Mansoori (Synthetic)",
     age_sex: "32Y · F",
     clinical_track: "Endocrine & Rubella Continuity",
     facility_a: "Mubadala Primary Care",

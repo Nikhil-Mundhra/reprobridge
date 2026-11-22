@@ -106,7 +106,7 @@ export default function CareFlowAndPatientHeader({
             Synthetic Patient Record (Stored in Neon / UAE Boundary)
           </p>
           <h2 className="mt-1 text-base font-semibold text-slate-900">
-            {patient?.patient_name ?? "Amina Al-Mansoori (Synthetic)"}{" "}
+            {patient?.patient_name ?? "Amira Al-Mansoori (Synthetic)"}{" "}
             <span className="ml-2 font-mono text-xs font-normal text-slate-500">
               {activePatientId}
             </span>

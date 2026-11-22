@@ -1352,7 +1352,7 @@ export default function ClinicalDocumentsDrawer({
     documents[0];
 
   const currentStageRank = getStageRank(currentLifeStage);
-  const patientName = obligations[0]?.patient_name ?? "Amina Al-Mansoori (Synthetic)";
+  const patientName = obligations[0]?.patient_name ?? "Amira Al-Mansoori (Synthetic)";
   const patientId = activePatientId;
   const demographics = PATIENT_DEMOGRAPHICS[patientId] ?? {
     dobSex: "14-Mar-1994 (32Y · F)",
