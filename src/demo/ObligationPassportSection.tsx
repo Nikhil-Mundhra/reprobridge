@@ -19,7 +19,7 @@ import ClinicalMetricVisualizer from "./ClinicalMetricVisualizer";
 import {
   SYNTHETIC_FHIR_RECORDS,
 } from "./constants";
-import { getUrgentDueChip } from "./helpers";
+import { formatClosurePolicyLabel, getUrgentDueChip } from "./helpers";
 import type { Obligation, SafetyBlockInfo } from "./types";
 
 function getPlainStatusBadge(obl: Obligation): { label: string; className: string } {
@@ -186,6 +186,13 @@ export default function ObligationPassportSection({
         const safetyBlock = safetyBlockFeedback[obl.id];
         const statusBadge = getPlainStatusBadge(obl);
         const transitionDiff = getTransitionDiff(obl, urgentDue);
+        const closurePolicyLabel = formatClosurePolicyLabel(obl.closure_policy);
+        const dueWindowText =
+          obl.due_window_start && obl.due_window_end
+            ? `${obl.due_window_start} → ${obl.due_window_end}`
+            : obl.due_window_end
+              ? `By ${obl.due_window_end}`
+              : null;
 
         return (
           <article
@@ -207,6 +214,16 @@ export default function ObligationPassportSection({
                       {urgentDue}
                     </span>
                   )}
+                  {obl.parent_obligation_id && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 font-mono text-[10px] font-medium text-teal-800">
+                      Linked ← {obl.parent_obligation_id}
+                    </span>
+                  )}
+                  {obl.protocol_code && (
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[10px] text-slate-600">
+                      {obl.protocol_code}
+                    </span>
+                  )}
                   <span className="font-mono text-[10px] text-slate-400">
                     {obl.status}
                   </span>
@@ -214,6 +231,22 @@ export default function ObligationPassportSection({
                 <h4 className="mt-2 text-base font-semibold text-slate-900">
                   {obl.title}
                 </h4>
+                {(closurePolicyLabel || dueWindowText) && obl.status !== "VERIFIED_CLOSED" && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+                    {closurePolicyLabel && (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50/80 px-2 py-0.5 font-medium text-amber-900">
+                        <ShieldAlert className="h-3 w-3 shrink-0 text-amber-700" aria-hidden="true" />
+                        {closurePolicyLabel}
+                      </span>
+                    )}
+                    {dueWindowText && (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[10px] text-slate-700">
+                        <Clock className="h-3 w-3 shrink-0 text-slate-500" aria-hidden="true" />
+                        Window: {dueWindowText}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {obl.status === "DEFERRED_TO_POSTPARTUM" ? (

@@ -138,3 +138,28 @@ def test_explain_payload_redacts_medication_directives_but_keeps_lab_values():
     assert "4.8 mIU/L" in rationale
     assert "112 mg/dL" in rationale
     assert "specialist-directed therapy" in rationale
+
+
+def test_exact_dates_and_mental_health_notes_stay_local_only():
+    mh_obl = {
+        **next(o for o in ALL_SEED_OBLIGATIONS if o["id"] == "OBL-401"),
+        "trigger_event_date": "2026-10-01",
+        "due_window_start": "2026-10-01",
+        "due_window_end": "2026-10-15",
+        "mental_health_notes": "Private verbatim narrative",
+        "safety_plan_details": "Local emergency contact info",
+    }
+    report = build_ai_safe_payload("FHIR_PREGNANCY_CONFIRMED", [mh_obl], [])
+    serialized = json.dumps(report["payload"])
+    assert "2026-10-01" not in serialized
+    assert "Private verbatim narrative" not in serialized
+    assert "Local emergency contact info" not in serialized
+    assert "Mariam" not in serialized
+    assert "perinatal_depression_anxiety_followup" in serialized
+    assert report["payload"]["obligations"][0]["protocol_code"] == "ACOG-PERINATAL-MH"
+    assert report["payload"]["obligations"][0]["closure_policy"] == "MENTAL_HEALTH_ASSESSMENT"
+
+    with pytest.raises(PrivacyViolationError):
+        assert_phi_free({"mental_health_notes": "Should never cross boundary"})
+    with pytest.raises(PrivacyViolationError):
+        assert_phi_free({"trigger_event_date": "2026-10-01"})

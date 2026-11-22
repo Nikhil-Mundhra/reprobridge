@@ -169,8 +169,10 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
         "PAT-AE-4092",
         "PAT-AE-5180",
         "PAT-AE-6304",
+        "PAT-AE-7415",
+        "PAT-AE-8529",
     ]
-    assert cohort_json["cohort_totals"]["total_patients"] == 3
+    assert cohort_json["cohort_totals"]["total_patients"] == 5
 
     fatima_initial = client.get("/api/obligations?patient_id=PAT-AE-5180")
     assert fatima_initial.status_code == 200
@@ -208,7 +210,7 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
     page_resp = client.get("/api/patients?limit=1&offset=1")
     assert page_resp.status_code == 200
     assert len(page_resp.json()["patients"]) == 1
-    assert page_resp.json()["total"] == 3
+    assert page_resp.json()["total"] == 5
     assert page_resp.json()["has_more"] is True
 
     # Rule-version dispatch scales automatically to newly imported patients without hardcoded IDs
@@ -358,5 +360,276 @@ def test_patient_reconciliation_questionnaire_and_submit(monkeypatch):
     )
     assert "8th week gestation" in reconcile_ev["summary"]
     assert "levothyroxine 25 mcg" in reconcile_ev["summary"]
+
+    client.post("/api/demo/reset")
+
+
+def test_five_evidence_clinical_gaps_end_to_end(monkeypatch):
+    """End-to-end verification of all 5 evidence-backed reproductive health continuity gaps."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = TestClient(app)
+    client.post("/api/demo/reset")
+
+    # ── GAP 1: Diabetes testing after gestational diabetes (PAT-AE-5180 / OBL-201) ──
+    pp_gdm = client.post(
+        "/api/transitions/postpartum?patient_id=PAT-AE-5180",
+        json={"delivery_date": "2026-10-01", "discharge_diagnoses": ["GDM_CONFIRMED"]},
+    )
+    assert pp_gdm.status_code == 200
+    gdm_obl = next(o for o in pp_gdm.json()["obligations"] if o["id"] == "OBL-201")
+    assert gdm_obl["protocol_code"] == "ADA-2026-OGTT-4-12W"
+    assert gdm_obl["due_window_start"] == "2026-10-29"
+    assert gdm_obl["due_window_end"] == "2026-12-24"
+    assert gdm_obl["closure_policy"] == "COMPLETED_TEST_NOT_BOOKING"
+
+    # Local protocol override supports delivery-admission OGTT window
+    pp_admission = client.post(
+        "/api/transitions/postpartum?patient_id=PAT-AE-5180",
+        json={
+            "delivery_date": "2026-10-01",
+            "protocol_override": "DELIVERY_ADMISSION_OGTT",
+        },
+    )
+    assert pp_admission.status_code == 200
+    adm_obl = next(o for o in pp_admission.json()["obligations"] if o["id"] == "OBL-201")
+    assert adm_obl["protocol_code"] == "LOCAL-DELIVERY-ADMISSION-OGTT"
+    assert adm_obl["due_window_start"] == "2026-10-01"
+    assert adm_obl["due_window_end"] == "2026-10-03"
+
+    # Booked appointment alone leaves testing open (HTTP 409)
+    gdm_booked = client.post(
+        "/api/obligations/OBL-201/verify",
+        json={
+            "clinician_name": "Dr. Noura Al-Ketbi (Endocrinology)",
+            "closure_evidence": "75g OGTT appointment booked for 6 weeks postpartum.",
+        },
+    )
+    assert gdm_booked.status_code == 409
+    assert "booked appointment" in gdm_booked.json()["detail"].lower()
+
+    # Completed 75g OGTT closes OBL-201 AND spawns separate Result Review child obligation
+    gdm_done = client.post(
+        "/api/obligations/OBL-201/verify",
+        json={
+            "clinician_name": "Dr. Noura Al-Ketbi (Endocrinology)",
+            "closure_evidence": "75g OGTT completed: fasting 91 mg/dL, 2-hour 132 mg/dL (normal).",
+        },
+    )
+    assert gdm_done.status_code == 200
+    assert gdm_done.json()["obligation"]["status"] == "VERIFIED_CLOSED"
+    child_rev = gdm_done.json()["spawned_obligation"]
+    assert child_rev is not None
+    assert child_rev["id"] == "OBL-201-REV"
+    assert child_rev["parent_obligation_id"] == "OBL-201"
+    assert child_rev["closure_policy"] == "RESULT_REVIEW_SIGNOFF"
+
+    # ── GAP 2: Postpartum Blood Pressure follow-up (PAT-AE-6304 / OBL-301) ──
+    pp_bp_remote = client.post(
+        "/api/transitions/postpartum?patient_id=PAT-AE-6304",
+        json={"delivery_date": "2026-10-01", "discharge_diagnoses": ["GESTATIONAL_HYPERTENSION"]},
+    )
+    assert pp_bp_remote.status_code == 200
+    bp_remote = next(o for o in pp_bp_remote.json()["obligations"] if o["id"] == "OBL-301")
+    assert bp_remote["protocol_code"] == "POSTPARTUM-BP-10D-REMOTE"
+    assert bp_remote["due_window_end"] == "2026-10-11"
+
+    pp_bp_severe = client.post(
+        "/api/transitions/postpartum?patient_id=PAT-AE-6304",
+        json={
+            "delivery_date": "2026-10-01",
+            "discharge_diagnoses": ["SEVERE_POSTPARTUM_HYPERTENSION"],
+        },
+    )
+    assert pp_bp_severe.status_code == 200
+    bp_severe = next(o for o in pp_bp_severe.json()["obligations"] if o["id"] == "OBL-301")
+    assert bp_severe["protocol_code"] == "SMFM-72H-SEVERE-HTN"
+    assert bp_severe["due_window_end"] == "2026-10-04"
+
+    # Booking-only visit rejected (HTTP 409)
+    bp_booked = client.post(
+        "/api/obligations/OBL-301/verify",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (MFM)",
+            "closure_evidence": "Office blood pressure appointment scheduled next Thursday.",
+        },
+    )
+    assert bp_booked.status_code == 409
+
+    # Severe BP reading logged via evidence auto-escalates deterministically
+    bp_ev = client.post(
+        "/api/obligations/OBL-301/evidence",
+        json={
+            "fhir_resource_type": "Observation",
+            "code_display": "Remote Postpartum Blood Pressure",
+            "result_value": "BP 168/112 mmHg with severe headache",
+            "source_facility": "Danat Al Emarat Remote BP Program",
+        },
+    )
+    assert bp_ev.status_code == 200
+    assert bp_ev.json()["safety_action"]["event_type"] == "CLINICAL_SAFETY_ESCALATED"
+    assert (
+        bp_ev.json()["obligation"]["owner"] == "Urgent Obstetric / Hypertension Escalation Protocol"
+    )
+
+    # Attempting closure with severe unstabilized BP returns 409
+    bp_severe_close = client.post(
+        "/api/obligations/OBL-301/verify",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (MFM)",
+            "closure_evidence": "Home BP 164/110 mmHg logged via text.",
+        },
+    )
+    assert bp_severe_close.status_code == 409
+
+    # Verified normotensive BP reading closes cleanly
+    bp_ok = client.post(
+        "/api/obligations/OBL-301/verify",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (MFM)",
+            "closure_evidence": "Remote BP 122/78 mmHg verified after escalation protocol completed; stabilized.",
+        },
+    )
+    assert bp_ok.status_code == 200
+    assert bp_ok.json()["obligation"]["status"] == "VERIFIED_CLOSED"
+
+    # ── GAP 3: Perinatal depression & anxiety follow-up (PAT-AE-7415 / OBL-401) ──
+    # Questionnaire score alone cannot close (HTTP 409)
+    mh_score_only = client.post(
+        "/api/obligations/OBL-401/verify",
+        json={
+            "clinician_name": "Dr. Huda Al-Mheiri (OB-GYN)",
+            "closure_evidence": "Repeat EPDS score 14 documented in chart.",
+        },
+    )
+    assert mh_score_only.status_code == 409
+    assert "screening signal" in mh_score_only.json()["detail"].lower()
+
+    # Safety concern routes immediately through deterministic urgent pathway
+    mh_safety_ev = client.post(
+        "/api/obligations/OBL-401/evidence",
+        json={
+            "fhir_resource_type": "QuestionnaireResponse",
+            "code_display": "EPDS Follow-up Safety Screen",
+            "result_value": "EPDS Item 10 positive — active self-harm safety concern reported",
+            "source_facility": "Tawam OB-GYN Clinic",
+        },
+    )
+    assert mh_safety_ev.status_code == 200
+    assert mh_safety_ev.json()["safety_action"]["event_type"] == "CLINICAL_SAFETY_ESCALATED"
+    assert (
+        mh_safety_ev.json()["obligation"]["owner"]
+        == "Approved Urgent Perinatal Safety & Psychiatry Pathway"
+    )
+
+    # Verified clinical assessment + safety stabilization closes OBL-401 & spawns monitoring child
+    mh_closed = client.post(
+        "/api/obligations/OBL-401/verify",
+        json={
+            "clinician_name": "Dr. Huda Al-Mheiri (Perinatal Psychiatry)",
+            "closure_evidence": (
+                "Urgent psychiatric evaluation and clinical assessment completed; safety plan "
+                "established and 4-week psychotherapy follow-up monitoring plan initiated."
+            ),
+        },
+    )
+    assert mh_closed.status_code == 200
+    assert mh_closed.json()["obligation"]["status"] == "VERIFIED_CLOSED"
+    assert mh_closed.json()["spawned_obligation"]["id"] == "OBL-401-MON"
+
+    # ── GAP 4: Abnormal cervical screening (PAT-AE-7415 / OBL-402) ──
+    preg_mariam = client.post("/api/transitions/pregnancy?patient_id=PAT-AE-7415")
+    assert preg_mariam.status_code == 200
+    cerv_obl = next(o for o in preg_mariam.json()["obligations"] if o["id"] == "OBL-402")
+    assert cerv_obl["status"] == "ESCALATED_FOR_REVIEW"
+    assert cerv_obl["protocol_code"] == "DOH-AD-CERVICAL-PREG"
+
+    # Contraindicated ECC during pregnancy blocked (HTTP 409)
+    cerv_ecc_blocked = client.post(
+        "/api/obligations/OBL-402/verify",
+        json={
+            "clinician_name": "Dr. Aisha Al-Shamsi (OB-GYN)",
+            "closure_evidence": "Endocervical curettage performed during Trimester 1.",
+        },
+    )
+    assert cerv_ecc_blocked.status_code == 409
+    assert "contraindicated" in cerv_ecc_blocked.json()["detail"].lower()
+
+    # Antenatal colposcopy excluding invasion closes triage & spawns deferred postpartum child
+    cerv_triage_ok = client.post(
+        "/api/obligations/OBL-402/verify",
+        json={
+            "clinician_name": "Dr. Aisha Al-Shamsi (OB-GYN)",
+            "closure_evidence": (
+                "Antenatal colposcopy completed: invasive disease excluded, ECC deferred; "
+                "reconciled under Abu Dhabi DoH / ASCCP algorithm."
+            ),
+        },
+    )
+    assert cerv_triage_ok.status_code == 200
+    cerv_pp_child = cerv_triage_ok.json()["spawned_obligation"]
+    assert cerv_pp_child is not None
+    assert cerv_pp_child["id"] == "OBL-402-PP"
+    assert cerv_pp_child["status"] == "DEFERRED_TO_POSTPARTUM"
+
+    # Postpartum child cannot close during pregnancy, wakes up after delivery
+    cerv_premature = client.post(
+        "/api/obligations/OBL-402-PP/verify",
+        json={
+            "clinician_name": "Dr. Aisha Al-Shamsi (OB-GYN)",
+            "closure_evidence": "Attempted premature closure during pregnancy.",
+        },
+    )
+    assert cerv_premature.status_code == 409
+
+    pp_mariam = client.post(
+        "/api/transitions/postpartum?patient_id=PAT-AE-7415",
+        json={"delivery_date": "2026-10-01"},
+    )
+    assert pp_mariam.status_code == 200
+    cerv_pp_active = next(o for o in pp_mariam.json()["obligations"] if o["id"] == "OBL-402-PP")
+    assert cerv_pp_active["status"] == "ESCALATED_FOR_REVIEW"
+    assert cerv_pp_active["due_window_start"] == "2026-11-12"
+    assert cerv_pp_active["due_window_end"] == "2026-12-24"
+
+    # ── GAP 5: Endometriosis evaluation (PAT-AE-8529 / OBL-501) ──
+    # Normal pelvic ultrasound logged via evidence preserves referral signal
+    endo_ev = client.post(
+        "/api/obligations/OBL-501/evidence",
+        json={
+            "fhir_resource_type": "DiagnosticReport",
+            "code_display": "Transvaginal Pelvic Ultrasound",
+            "result_value": "Normal pelvic ultrasound; no adnexal masses seen",
+            "source_facility": "Yas Island Family Medicine",
+        },
+    )
+    assert endo_ev.status_code == 200
+    assert endo_ev.json()["safety_action"]["event_type"] == "CLINICAL_SIGNAL_PRESERVED"
+
+    # Attempting to close OBL-501 with only a normal ultrasound/exam returns 409 (NICE NG73)
+    endo_normal_blocked = client.post(
+        "/api/obligations/OBL-501/verify",
+        json={
+            "clinician_name": "Dr. Salma Al-Qubaisi (Primary Care)",
+            "closure_evidence": "Normal pelvic ultrasound and normal pelvic examination; reassuring.",
+        },
+    )
+    assert endo_normal_blocked.status_code == 409
+    assert "nice ng73" in endo_normal_blocked.json()["detail"].lower()
+
+    # Documented specialist gynecology endometriosis pathway review closes cleanly
+    endo_closed = client.post(
+        "/api/obligations/OBL-501/verify",
+        json={
+            "clinician_name": "Dr. Salma Al-Qubaisi (Complex Gynecology)",
+            "closure_evidence": (
+                "Specialist gynecology endometriosis clinic review completed despite prior normal "
+                "ultrasound; approved diagnostic pathway and pelvic MRI ordered."
+            ),
+        },
+    )
+    assert endo_closed.status_code == 200
+    assert endo_closed.json()["obligation"]["status"] == "VERIFIED_CLOSED"
 
     client.post("/api/demo/reset")

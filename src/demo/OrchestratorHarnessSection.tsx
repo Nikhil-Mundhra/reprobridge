@@ -526,6 +526,7 @@ export default function OrchestratorHarnessSection({
           >
             {trace.map((step, idx) => {
               const meta = TRACE_NODE_META[step.node] ?? {
+                shortTitle: step.node.split("_")[0] || step.node,
                 title: step.node.replaceAll("_", " "),
                 accent: "border-t-teal-500",
                 badge: "bg-teal-100 text-teal-800",
@@ -539,6 +540,7 @@ export default function OrchestratorHarnessSection({
                   type="button"
                   role="tab"
                   id={`trace-tab-${step.node}`}
+                  aria-label={`${meta.title} (${exec.label})`}
                   aria-selected={isSelected}
                   data-trace-index={idx}
                   title={step.detail}
@@ -571,7 +573,7 @@ export default function OrchestratorHarnessSection({
                       {idx + 1}
                     </span>
                     <span className="truncate font-semibold text-slate-900">
-                      {meta.title}
+                      {meta.shortTitle}
                     </span>
                   </span>
                   <span
@@ -592,7 +594,7 @@ export default function OrchestratorHarnessSection({
                     4
                   </span>
                   <span className="truncate font-semibold text-slate-900">
-                    Synthesize Handoff Brief
+                    Synthesize
                   </span>
                 </span>
                 <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-1.5 py-0.5 text-[10px] font-semibold text-purple-800">

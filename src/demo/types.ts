@@ -10,6 +10,13 @@ export interface Obligation {
   owner: string;
   status: string;
   priority: string;
+  parent_obligation_id?: string | null;
+  trigger_event_date?: string | null;
+  due_window_start?: string | null;
+  due_window_end?: string | null;
+  due_label?: string | null;
+  closure_policy?: string | null;
+  protocol_code?: string | null;
   verified_by: string | null;
   closure_evidence: string | null;
 }

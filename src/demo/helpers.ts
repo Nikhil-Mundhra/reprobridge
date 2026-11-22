@@ -77,23 +77,69 @@ export function formatExecutionLabel(execution?: string): { label: string; class
 }
 
 export function getUrgentDueChip(obl: Obligation): string | null {
+  if (obl.status === "VERIFIED_CLOSED") return null;
+  if (obl.due_label && obl.status === "ESCALATED_FOR_REVIEW") {
+    return obl.due_label;
+  }
   if (obl.status !== "ESCALATED_FOR_REVIEW") return null;
   if (obl.life_stage === "Postpartum") return "Pre-discharge ≤ 48h";
   return "Due ≤ 72h";
 }
 
+export function formatClosurePolicyLabel(policy?: string | null): string | null {
+  switch ((policy ?? "").toUpperCase()) {
+    case "COMPLETED_TEST_NOT_BOOKING":
+      return "Guard: Completed test required (booking alone blocked)";
+    case "RESULT_REVIEW_SIGNOFF":
+      return "Guard: Separate clinician result review sign-off";
+    case "POSTPARTUM_BP_ASSESSMENT":
+      return "Guard: Verified BP reading required (≥160/110 escalates)";
+    case "MENTAL_HEALTH_ASSESSMENT":
+      return "Guard: Clinical assessment required (score alone blocked)";
+    case "CERVICAL_ALGORITHM_RECONCILIATION":
+      return "Guard: DoH/ASCCP algorithm reconciliation (ECC/LEEP blocked in pregnancy)";
+    case "ENDOMETRIOSIS_PATHWAY_REVIEW":
+      return "Guard: Normal scan cannot close · Specialist pathway review required";
+    case "DEFERRED_UNTIL_POSTPARTUM":
+      return "Guard: Locked until Postpartum transition";
+    default:
+      return null;
+  }
+}
+
 export function parseStreamedSections(raw: string): { summary: string; handoff: string } {
-  const trimmed = raw.trim();
-  if (trimmed.includes("HANDOFF:")) {
-    const [before, after] = trimmed.split("HANDOFF:", 2);
+  let trimmed = raw.trim();
+  if (trimmed.startsWith("```")) {
+    trimmed = trimmed.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+  }
+  const markerRe = /(?:^|\n)[ \t]*[*#_]*[ \t]*(SUMMARY|HANDOFF)[ \t]*[*_]*[ \t]*:[ \t]*[*_]*/gi;
+  const matches: Array<{ name: string; start: number; end: number }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = markerRe.exec(trimmed)) !== null) {
+    matches.push({
+      name: match[1].toUpperCase(),
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+  if (matches.length === 0) {
     return {
-      summary: before.replace(/^SUMMARY:\s*/i, "").trim(),
-      handoff: after.trim(),
+      summary: trimmed.replace(/^SUMMARY:\s*/i, "").trim(),
+      handoff: "",
     };
   }
+  const sections: Record<string, string> = {};
+  const preamble = trimmed.slice(0, matches[0].start).trim();
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    const nextStart = i + 1 < matches.length ? matches[i + 1].start : trimmed.length;
+    if (!(cur.name in sections)) {
+      sections[cur.name] = trimmed.slice(cur.end, nextStart).trim();
+    }
+  }
   return {
-    summary: trimmed.replace(/^SUMMARY:\s*/i, "").trim(),
-    handoff: "",
+    summary: sections.SUMMARY || preamble,
+    handoff: sections.HANDOFF ?? "",
   };
 }
 
@@ -217,12 +263,15 @@ export function parseHandoffItems(text: string): string[] {
 }
 
 export function detectObligationId(text: string): string | null {
-  const match = text.match(/\bOBL-\d+\b/i);
+  const match = text.match(/\bOBL-[A-Z0-9-]+\b/i);
   if (match) return match[0].toUpperCase();
-  if (/dysglycemia|ogtt|hba1c|RB-METABOLIC/i.test(text)) return "OBL-201";
+  if (/dysglycemia|gdm|ogtt|hba1c|RB-METABOLIC/i.test(text)) return "OBL-201";
   if (/varicella|vzv/i.test(text)) return "OBL-202";
-  if (/preeclampsia|aspirin|RB-PREECLAMPSIA/i.test(text)) return "OBL-301";
-  if (/hpv|RB-HPV/i.test(text)) return "OBL-302";
+  if (/preeclampsia|hypertension|postpartum\s+bp|aspirin|RB-PREECLAMPSIA/i.test(text)) return "OBL-301";
+  if (/hpv\s+9-?valent|hpv\s+series|RB-HPV/i.test(text)) return "OBL-302";
+  if (/epds|gad-?7|depression|anxiety|perinatal\s+mental|RB-PERINATAL-MH/i.test(text)) return "OBL-401";
+  if (/cervical|colposcopy|cytology|hsil|hpv16|RB-CERVICAL/i.test(text)) return "OBL-402";
+  if (/endometriosis|pelvic\s+pain|dysmenorrhea|RB-ENDO/i.test(text)) return "OBL-501";
   if (/thyroid|tsh|RB-THYROID/i.test(text)) return "OBL-101";
   if (/rubella|mmr|vaccin|RB-IMMUNE/i.test(text)) return "OBL-102";
   return null;

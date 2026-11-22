@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Database, FileCheck2, Plus, X } from "lucide-react";
+import { Database, FileCheck2, Plus, ShieldAlert, X } from "lucide-react";
+import { formatClosurePolicyLabel } from "./helpers";
 import type { AuditEvent, ClinicalEvidence, Obligation } from "./types";
 
 interface VerifyClosureModalProps {
@@ -31,6 +32,8 @@ export default function VerifyClosureModal({
   const [newEvValue, setNewEvValue] = useState("");
   const [newEvFacility, setNewEvFacility] = useState("Malaffi HIE · Manual Entry");
   const [submitting, setSubmitting] = useState(false);
+  const [guardError, setGuardError] = useState<string | null>(null);
+  const policyLabel = formatClosurePolicyLabel(target.closure_policy);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +109,7 @@ export default function VerifyClosureModal({
   async function handleConfirmVerify(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
+    setGuardError(null);
     onError(null);
     try {
       const res = await fetch(`/api/obligations/${target.id}/verify`, {
@@ -119,7 +123,11 @@ export default function VerifyClosureModal({
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.detail || "Verification failed");
+        const message = errBody.detail || "Verification failed";
+        if (res.status === 409) {
+          setGuardError(message);
+        }
+        throw new Error(message);
       }
       onClose();
       await onVerified(clinicianName);
@@ -149,6 +157,12 @@ export default function VerifyClosureModal({
             >
               {target.id}: {target.title}
             </h3>
+            {policyLabel && (
+              <p className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+                <ShieldAlert className="h-3 w-3 shrink-0 text-amber-700" aria-hidden="true" />
+                {policyLabel}
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -282,6 +296,20 @@ export default function VerifyClosureModal({
         </div>
 
         <form onSubmit={handleConfirmVerify} className="mt-4 space-y-4">
+          {guardError && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2.5 text-xs text-rose-950"
+            >
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" aria-hidden="true" />
+              <div>
+                <p className="font-semibold text-rose-900">
+                  Deterministic Clinical Safety Guard Blocked Closure (HTTP 409)
+                </p>
+                <p className="mt-0.5 leading-relaxed text-rose-800">{guardError}</p>
+              </div>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-slate-700">
               Authorized Clinician

@@ -20,16 +20,100 @@ RULE_CATALOG: list[dict[str, Any]] = [
         "clinical_category": "subclinical_hypothyroidism_tsh_followup",
         "trigger_event": "FHIR_PREGNANCY_CONFIRMED",
         "deterministic_action": "ESCALATE_TO_URGENT_OB_REVIEW",
+        "closure_policy": "CLINICIAN_EVIDENCE",
+        "protocol_code": "ATA-THYROID-T1",
         "human_approval_required": True,
         "evidence_basis": "First-trimester TSH target (<2.5 mIU/L) requires clinician evaluation.",
     },
     {
         "rule_version": "RB-IMMUNE-v1.2.1",
-        "clinical_category": "rubella_igg_non_immune_vaccination",
+        "clinical_category": "live_vaccine_non_immune_deferral",
         "trigger_event": "FHIR_PREGNANCY_CONFIRMED",
         "deterministic_action": "DEFER_TO_POSTPARTUM_PATHWAY",
+        "closure_policy": "DEFERRED_UNTIL_POSTPARTUM",
+        "protocol_code": "DOH-IMMUNE-MMR",
         "human_approval_required": True,
-        "evidence_basis": "Live MMR vaccine is contraindicated during pregnancy; preserve for postpartum closure.",
+        "evidence_basis": "Live MMR/Varicella vaccines are contraindicated during pregnancy; preserve for postpartum closure.",
+    },
+    {
+        "rule_version": "RB-METABOLIC-v2.0.0",
+        "clinical_category": "gestational_dysglycemia_ogtt_followup",
+        "trigger_event": "FHIR_DELIVERY_POSTPARTUM",
+        "deterministic_action": "TRACK_POSTPARTUM_OGTT_AND_SEPARATE_RESULT_REVIEW",
+        "closure_policy": "COMPLETED_TEST_NOT_BOOKING",
+        "protocol_code": "ADA-2026-OGTT-4-12W",
+        "human_approval_required": True,
+        "evidence_basis": (
+            "ADA 2026 recommends a 75g OGTT at 4–12 weeks postpartum (or locally adopted "
+            "delivery-admission protocol); a booked appointment leaves testing open and result "
+            "review is tracked as a separate linked obligation."
+        ),
+    },
+    {
+        "rule_version": "RB-PREECLAMPSIA-v2.0.0",
+        "clinical_category": "preeclampsia_prophylaxis_window",
+        "trigger_event": "FHIR_DELIVERY_POSTPARTUM",
+        "deterministic_action": "TRACK_POSTPARTUM_BP_AND_ESCALATE_SEVERE_READINGS",
+        "closure_policy": "POSTPARTUM_BP_ASSESSMENT",
+        "protocol_code": "SMFM-72H-SEVERE-HTN",
+        "human_approval_required": True,
+        "evidence_basis": (
+            "SMFM targets ≤72h post-discharge BP follow-up for severe hypertension; RCT data "
+            "(BMJ Q&S) shows 92.2% 10-day capture with remote BP monitoring vs 43.7% office-based. "
+            "Severe readings (≥160/110 mmHg) route immediately to local escalation protocol."
+        ),
+    },
+    {
+        "rule_version": "RB-HPV-v1.1.0",
+        "clinical_category": "hpv_series_postpartum_completion",
+        "trigger_event": "FHIR_PREGNANCY_CONFIRMED",
+        "deterministic_action": "DEFER_TO_POSTPARTUM_PATHWAY",
+        "closure_policy": "DEFERRED_UNTIL_POSTPARTUM",
+        "protocol_code": "DOH-IMMUNE-HPV",
+        "human_approval_required": True,
+        "evidence_basis": "Routine HPV vaccination is postponed during pregnancy and resumed postpartum.",
+    },
+    {
+        "rule_version": "RB-PERINATAL-MH-v1.0.0",
+        "clinical_category": "perinatal_depression_anxiety_followup",
+        "trigger_event": "FHIR_PREGNANCY_CONFIRMED",
+        "deterministic_action": "REQUIRE_CLINICAL_ASSESSMENT_AND_URGENT_SAFETY_ROUTING",
+        "closure_policy": "MENTAL_HEALTH_ASSESSMENT",
+        "protocol_code": "ACOG-PERINATAL-MH",
+        "human_approval_required": True,
+        "evidence_basis": (
+            "ACOG recommends validated perinatal depression/anxiety screening linked to clinical "
+            "assessment, treatment, and monitoring; a score is only a screening signal, and "
+            "documented safety concerns route deterministically to the approved urgent pathway."
+        ),
+    },
+    {
+        "rule_version": "RB-CERVICAL-v1.0.0",
+        "clinical_category": "abnormal_cervical_screening_followup",
+        "trigger_event": "FHIR_PREGNANCY_CONFIRMED",
+        "deterministic_action": "RECONCILE_PREGNANCY_ALGORITHM_AND_DEFER_EXCISION",
+        "closure_policy": "CERVICAL_ALGORITHM_RECONCILIATION",
+        "protocol_code": "DOH-AD-CERVICAL-PREG",
+        "human_approval_required": True,
+        "evidence_basis": (
+            "Inadequate follow-up of abnormal cervical screening ranges from 4%–75%. Reconcile "
+            "prior HPV/cytology, procedures, and pregnancy status per Abu Dhabi DoH / ASCCP "
+            "(colposcopy triage in pregnancy; ECC contraindicated; excision deferred ≥6w postpartum)."
+        ),
+    },
+    {
+        "rule_version": "RB-ENDO-v1.0.0",
+        "clinical_category": "endometriosis_symptom_evaluation",
+        "trigger_event": "FHIR_PREGNANCY_CONFIRMED",
+        "deterministic_action": "PRESERVE_REFERRAL_SIGNAL_DESPITE_NORMAL_SCAN",
+        "closure_policy": "ENDOMETRIOSIS_PATHWAY_REVIEW",
+        "protocol_code": "NICE-NG73-ENDO",
+        "human_approval_required": True,
+        "evidence_basis": (
+            "WHO reports 4–12 years average diagnostic delay for endometriosis; NICE NG73 advises "
+            "that a normal pelvic exam or ultrasound can coexist with suspected endometriosis "
+            "and must not close or dismiss specialist referral."
+        ),
     },
 ]
 

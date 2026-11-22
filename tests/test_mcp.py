@@ -48,7 +48,17 @@ def test_mcp_jsonrpc_list_and_call(monkeypatch):
     )
     assert call_resp["result"]["isError"] is False
     rules = call_resp["result"]["content"][0]["json"]["rules"]
-    assert len(rules) == 2
+    assert len(rules) == 8
+    rule_versions = {r["rule_version"] for r in rules}
+    assert {
+        "RB-THYROID-v1.4.0",
+        "RB-IMMUNE-v1.2.1",
+        "RB-METABOLIC-v2.0.0",
+        "RB-PREECLAMPSIA-v2.0.0",
+        "RB-PERINATAL-MH-v1.0.0",
+        "RB-CERVICAL-v1.0.0",
+        "RB-ENDO-v1.0.0",
+    }.issubset(rule_versions)
 
 
 def test_mcp_unknown_tool_returns_error():

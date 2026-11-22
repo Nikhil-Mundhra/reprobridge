@@ -480,6 +480,65 @@ export function extractClinicalMetrics(obl: Obligation): ClinicalMetricSpec[] {
     });
   }
 
+  // 8. Perinatal Depression & Anxiety Screening (EPDS / GAD-7)
+  const epdsMatch = text.match(/EPDS\s*[:=(]?\s*(\d{1,2})/i);
+  if (obl.rule_version.startsWith("RB-PERINATAL-MH-") && epdsMatch) {
+    const baseline = Number(epdsMatch[1]);
+    const closureEpds = closure.match(/EPDS\s*[:=(]?\s*(\d{1,2})/i);
+    const verifiedValue = isClosed && closureEpds ? Number(closureEpds[1]) : undefined;
+    const activeVal = verifiedValue ?? baseline;
+    const status: MetricStatus =
+      verifiedValue !== undefined && verifiedValue < 10
+        ? "NORMALIZED"
+        : activeVal >= 13
+          ? "HIGH"
+          : activeVal >= 10
+            ? "BORDERLINE"
+            : "NORMAL";
+    metrics.push({
+      id: `${obl.id}-epds`,
+      label: "EPDS Screen (Signal Only)",
+      unit: "/ 30",
+      min: 0,
+      max: 30,
+      value: baseline,
+      verifiedValue,
+      decimals: 0,
+      status,
+      referenceLabel: "ACOG Positive Cutoff: ≥13",
+      targetLine: { value: 13, label: "Screen ≥13" },
+      zones: [
+        { start: 0, end: 10, tone: "emerald" },
+        { start: 10, end: 13, tone: "amber" },
+        { start: 13, end: 30, tone: "rose" },
+      ],
+    });
+  }
+
+  const gadMatch = text.match(/GAD-?7\s*[:=(]?\s*(\d{1,2})/i);
+  if (obl.rule_version.startsWith("RB-PERINATAL-MH-") && gadMatch) {
+    const baseline = Number(gadMatch[1]);
+    const status: MetricStatus =
+      isClosed ? "NORMALIZED" : baseline >= 10 ? "HIGH" : baseline >= 5 ? "BORDERLINE" : "NORMAL";
+    metrics.push({
+      id: `${obl.id}-gad7`,
+      label: "GAD-7 Anxiety Screen",
+      unit: "/ 21",
+      min: 0,
+      max: 21,
+      value: baseline,
+      decimals: 0,
+      status,
+      referenceLabel: "Moderate Cutoff: ≥10",
+      targetLine: { value: 10, label: "Moderate ≥10" },
+      zones: [
+        { start: 0, end: 5, tone: "emerald" },
+        { start: 5, end: 10, tone: "amber" },
+        { start: 10, end: 21, tone: "rose" },
+      ],
+    });
+  }
+
   return metrics;
 }
 

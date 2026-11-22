@@ -19,7 +19,7 @@ export const DEFAULT_PATIENT_COHORT: PatientCohortSummary[] = [
     patient_id: "PAT-AE-5180",
     patient_name: "Fatima Al-Zaabi (Synthetic)",
     age_sex: "29Y · F",
-    clinical_track: "Metabolic & Varicella Continuity",
+    clinical_track: "GDM Postpartum OGTT & Varicella",
     facility_a: "Al Bateen Primary Clinic",
     facility_b: "Corniche OB-GYN",
     life_stage: "Preconception",
@@ -33,12 +33,40 @@ export const DEFAULT_PATIENT_COHORT: PatientCohortSummary[] = [
     patient_id: "PAT-AE-6304",
     patient_name: "Sara Al-Nuaimi (Synthetic)",
     age_sex: "36Y · F",
-    clinical_track: "Preeclampsia & HPV Continuity",
+    clinical_track: "Postpartum BP & HPV Continuity",
     facility_a: "Khalifa City Family Medicine",
     facility_b: "Danat Al Emarat Maternity",
     life_stage: "Preconception",
     total_obligations: 2,
     open_count: 2,
+    urgent_count: 0,
+    deferred_count: 0,
+    closed_count: 0,
+  },
+  {
+    patient_id: "PAT-AE-7415",
+    patient_name: "Mariam Al-Dhaheri (Synthetic)",
+    age_sex: "31Y · F",
+    clinical_track: "Perinatal Mental Health & Cervical Screening",
+    facility_a: "Al Ain Primary Women's Clinic",
+    facility_b: "Tawam OB-GYN & Perinatal Psychiatry",
+    life_stage: "Preconception",
+    total_obligations: 2,
+    open_count: 2,
+    urgent_count: 0,
+    deferred_count: 0,
+    closed_count: 0,
+  },
+  {
+    patient_id: "PAT-AE-8529",
+    patient_name: "Hessa Al-Mazrouei (Synthetic)",
+    age_sex: "27Y · F",
+    clinical_track: "Endometriosis Evaluation Continuity",
+    facility_a: "Yas Island Family Medicine",
+    facility_b: "Cleveland Clinic Abu Dhabi Gynecology",
+    life_stage: "Preconception",
+    total_obligations: 1,
+    open_count: 1,
     urgent_count: 0,
     deferred_count: 0,
     closed_count: 0,
@@ -60,24 +88,28 @@ export const FLOW_STEPS = [
 
 export const TRACE_NODE_META: Record<
   string,
-  { title: string; accent: string; badge: string }
+  { shortTitle: string; title: string; accent: string; badge: string }
 > = {
   detect_open_obligations: {
+    shortTitle: "Detect",
     title: "Detect Open Obligations",
     accent: "border-t-teal-500",
     badge: "bg-teal-100 text-teal-800",
   },
   evaluate_life_stage_transition: {
+    shortTitle: "Evaluate",
     title: "Evaluate Transition Rules",
     accent: "border-t-sky-500",
     badge: "bg-sky-100 text-sky-800",
   },
   apply_uae_privacy_firewall: {
+    shortTitle: "Firewall",
     title: "UAE Privacy Firewall",
     accent: "border-t-indigo-500",
     badge: "bg-indigo-100 text-indigo-800",
   },
   synthesize_coordination_brief: {
+    shortTitle: "Synthesize",
     title: "Synthesize Handoff Brief",
     accent: "border-t-purple-500",
     badge: "bg-purple-100 text-purple-800",
@@ -212,6 +244,52 @@ export const SYNTHETIC_FHIR_RECORDS: Record<string, Record<string, unknown>> = {
     ],
     meta: { source: "urn:malaffi:hie:synthetic-immunization-registry" },
   },
+  "OBL-401": {
+    resourceType: "QuestionnaireResponse",
+    id: "qr-epds-2026-09",
+    status: "completed",
+    subject: { reference: "Patient/PAT-AE-7415" },
+    authored: "2026-09-25T10:15:00+04:00",
+    item: [
+      { linkId: "epds-total", text: "Edinburgh Postnatal Depression Scale (EPDS)", answer: [{ valueInteger: 15 }] },
+      { linkId: "gad7-total", text: "GAD-7 Anxiety Scale", answer: [{ valueInteger: 12 }] },
+      { linkId: "epds-item10", text: "Self-harm safety item", answer: [{ valueString: "Negative at intake (re-check on follow-up)" }] },
+    ],
+    meta: { source: "urn:malaffi:hie:synthetic-alain-behavioral-screen" },
+  },
+  "OBL-402": {
+    resourceType: "DiagnosticReport",
+    id: "rep-cervical-2026-07",
+    status: "final",
+    code: {
+      coding: [
+        {
+          system: "http://loinc.org",
+          code: "10524-7",
+          display: "Microscopic observation in Cervix by Cyto stain (Pap) + High-Risk HPV",
+        },
+      ],
+    },
+    subject: { reference: "Patient/PAT-AE-7415" },
+    effectiveDateTime: "2026-07-19T09:40:00+04:00",
+    conclusion:
+      "Pre-pregnancy HPV16 Positive with HSIL cytology. No interim colposcopy documented; reconcile with pregnancy status per Abu Dhabi DoH / ASCCP algorithm.",
+    meta: { source: "urn:malaffi:hie:synthetic-alain-cytology" },
+  },
+  "OBL-501": {
+    resourceType: "Condition",
+    id: "cond-pelvic-pain-2026-09",
+    clinicalStatus: { coding: [{ code: "active" }] },
+    code: { text: "Recurring severe dysmenorrhea & chronic cyclic pelvic pain (suspected endometriosis)" },
+    subject: { reference: "Patient/PAT-AE-8529" },
+    recordedDate: "2026-09-10",
+    note: [
+      {
+        text: "3 documented visits over 14 months with missed workdays; transvaginal ultrasound normal. Per NICE NG73, normal scan does not exclude endometriosis.",
+      },
+    ],
+    meta: { source: "urn:malaffi:hie:synthetic-yas-family-medicine" },
+  },
 };
 
 export const AUDIT_EVENT_META: Record<
@@ -234,6 +312,24 @@ export const AUDIT_EVENT_META: Record<
     dot: "bg-rose-600",
     tag: "bg-rose-50 text-rose-800 border-rose-200",
     category: "safety",
+  },
+  CLINICAL_SAFETY_ESCALATED: {
+    label: "Urgent Safety Escalated",
+    dot: "bg-rose-600",
+    tag: "bg-rose-50 text-rose-800 border-rose-200",
+    category: "safety",
+  },
+  CLINICAL_SIGNAL_PRESERVED: {
+    label: "Signal Preserved",
+    dot: "bg-indigo-500",
+    tag: "bg-indigo-50 text-indigo-800 border-indigo-200",
+    category: "safety",
+  },
+  CHILD_OBLIGATION_CREATED: {
+    label: "Linked Follow-up",
+    dot: "bg-teal-600",
+    tag: "bg-teal-50 text-teal-800 border-teal-200",
+    category: "transition",
   },
   AGENT_BRIEF_GENERATED: {
     label: "AI Brief (0 PHI)",
@@ -328,6 +424,46 @@ export const PATIENT_FACILITY_STAGES: Record<string, FacilityStage[]> = {
       dayTag: "Day 386",
       facility: "Danat Al Emarat Postpartum",
       emrSystem: "Inpatient",
+    },
+  ],
+  "PAT-AE-7415": [
+    {
+      stageIndex: 0,
+      dayTag: "Day 0",
+      facility: "Al Ain Primary Women's Clinic",
+      emrSystem: "Epic",
+    },
+    {
+      stageIndex: 1,
+      dayTag: "Day 84",
+      facility: "Tawam OB-GYN & Perinatal Psychiatry",
+      emrSystem: "Oracle",
+    },
+    {
+      stageIndex: 2,
+      dayTag: "Day 350",
+      facility: "Tawam Postpartum & Colposcopy Clinic",
+      emrSystem: "Inpatient",
+    },
+  ],
+  "PAT-AE-8529": [
+    {
+      stageIndex: 0,
+      dayTag: "Day 0",
+      facility: "Yas Island Family Medicine",
+      emrSystem: "Epic",
+    },
+    {
+      stageIndex: 1,
+      dayTag: "Month 14",
+      facility: "Cleveland Clinic Abu Dhabi Gynecology",
+      emrSystem: "Epic",
+    },
+    {
+      stageIndex: 2,
+      dayTag: "Follow-up",
+      facility: "Endometriosis Specialist Pathway",
+      emrSystem: "Malaffi HIE",
     },
   ],
 };

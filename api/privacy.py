@@ -24,6 +24,12 @@ PHI_FIELDS: frozenset[str] = frozenset(
         "evidence_source",
         "verified_by",
         "closure_evidence",
+        "trigger_event_date",
+        "due_window_start",
+        "due_window_end",
+        "mental_health_notes",
+        "safety_plan_details",
+        "symptom_free_text",
     }
 )
 
@@ -38,9 +44,40 @@ _CLINICAL_CATEGORIES: dict[str, str] = {
     "RB-THYROID-v1.4.0": "subclinical_hypothyroidism_tsh_followup",
     "RB-IMMUNE-v1.2.1": "live_vaccine_non_immune_deferral",
     "RB-METABOLIC-v1.2.0": "gestational_dysglycemia_ogtt_followup",
+    "RB-METABOLIC-v2.0.0": "gestational_dysglycemia_ogtt_followup",
+    "RB-METABOLIC-REVIEW-v2.0.0": "postpartum_gdm_ogtt_result_review",
     "RB-PREECLAMPSIA-v1.3.0": "preeclampsia_prophylaxis_window",
+    "RB-PREECLAMPSIA-v2.0.0": "preeclampsia_prophylaxis_window",
     "RB-HPV-v1.1.0": "hpv_series_postpartum_completion",
+    "RB-PERINATAL-MH-v1.0.0": "perinatal_depression_anxiety_followup",
+    "RB-PERINATAL-MH-MON-v1.0.0": "perinatal_mental_health_monitoring",
+    "RB-CERVICAL-v1.0.0": "abnormal_cervical_screening_followup",
+    "RB-ENDO-v1.0.0": "endometriosis_symptom_evaluation",
 }
+
+_CLINICAL_CATEGORY_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("RB-THYROID-", "subclinical_hypothyroidism_tsh_followup"),
+    ("RB-IMMUNE-", "live_vaccine_non_immune_deferral"),
+    ("RB-METABOLIC-REVIEW-", "postpartum_gdm_ogtt_result_review"),
+    ("RB-METABOLIC-", "gestational_dysglycemia_ogtt_followup"),
+    ("RB-PREECLAMPSIA-", "preeclampsia_prophylaxis_window"),
+    ("RB-HPV-", "hpv_series_postpartum_completion"),
+    ("RB-PERINATAL-MH-MON-", "perinatal_mental_health_monitoring"),
+    ("RB-PERINATAL-MH-", "perinatal_depression_anxiety_followup"),
+    ("RB-CERVICAL-", "abnormal_cervical_screening_followup"),
+    ("RB-ENDO-", "endometriosis_symptom_evaluation"),
+)
+
+
+def resolve_clinical_category(rule_version: str) -> str:
+    """Resolve a versioned rule identifier to a controlled non-PHI clinical category."""
+    if rule_version in _CLINICAL_CATEGORIES:
+        return _CLINICAL_CATEGORIES[rule_version]
+    upper = rule_version.upper()
+    for prefix, category in _CLINICAL_CATEGORY_PREFIXES:
+        if upper.startswith(prefix):
+            return category
+    return "preventive_reproductive_followup"
 
 
 class PrivacyViolationError(RuntimeError):
@@ -70,7 +107,8 @@ def scrub_text_phi(text: str, extra_forbidden: list[str] | None = None) -> str:
 # They are stripped before external AI egress so the assistive LLM is never primed with
 # drug/dose directives it is forbidden to repeat (it must not prescribe or dose).
 _MEDICATION_NAME_RE = re.compile(
-    r"\b(?:low[- ]dose\s+)?(?:levothyroxine|aspirin|metformin|insulin|labetalol|nifedipine)\b",
+    r"\b(?:low[- ]dose\s+)?"
+    r"(?:levothyroxine|aspirin|metformin|insulin|labetalol|nifedipine|sertraline|fluoxetine|progestin)\b",
     flags=re.IGNORECASE,
 )
 # Doses like "150 mg", "50 mcg nightly", "(150 mg nightly)". Lab units such as mg/dL or
@@ -99,18 +137,29 @@ def deidentify_obligation(obligation: dict[str, Any]) -> dict[str, Any]:
     """Strip all PHI from a single obligation record for safe MCP / AI consumption."""
     rule_version = str(obligation.get("rule_version", "UNKNOWN"))
     patient_id = str(obligation.get("patient_id", "UNKNOWN"))
-    return {
+    raw_due_label = obligation.get("due_label")
+    safe_due_label = (
+        redact_medication_directives(scrub_text_phi(str(raw_due_label))) if raw_due_label else None
+    )
+    deid: dict[str, Any] = {
         "obligation_id": obligation.get("id"),
         "case_token": pseudonymize_patient_id(patient_id),
         "life_stage": obligation.get("life_stage"),
-        "clinical_category": _CLINICAL_CATEGORIES.get(
-            rule_version, "preventive_reproductive_followup"
-        ),
+        "clinical_category": resolve_clinical_category(rule_version),
         "rule_version": rule_version,
         "priority": obligation.get("priority"),
         "status": obligation.get("status"),
         "owner_specialty": obligation.get("owner"),
     }
+    if safe_due_label:
+        deid["due_label"] = safe_due_label
+    if obligation.get("protocol_code"):
+        deid["protocol_code"] = obligation.get("protocol_code")
+    if obligation.get("closure_policy"):
+        deid["closure_policy"] = obligation.get("closure_policy")
+    if obligation.get("parent_obligation_id"):
+        deid["parent_obligation_id"] = obligation.get("parent_obligation_id")
+    return deid
 
 
 def build_ai_safe_payload(
@@ -164,6 +213,10 @@ def build_ai_safe_payload(
             "priority",
             "status",
             "owner_specialty",
+            "due_label",
+            "protocol_code",
+            "closure_policy",
+            "parent_obligation_id",
         ],
         "phi_check_passed": True,
     }
@@ -213,6 +266,10 @@ def build_obligation_explain_payload(obligation: dict[str, Any]) -> dict[str, An
             "priority",
             "status",
             "owner_specialty",
+            "due_label",
+            "protocol_code",
+            "closure_policy",
+            "parent_obligation_id",
             "finding_title",
             "clinical_rationale",
         ],
@@ -271,6 +328,10 @@ def build_reconciliation_questionnaire_payload(
             "priority",
             "status",
             "owner_specialty",
+            "due_label",
+            "protocol_code",
+            "closure_policy",
+            "parent_obligation_id",
             "finding_title",
             "clinical_rationale",
         ],

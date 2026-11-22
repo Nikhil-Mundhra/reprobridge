@@ -42,9 +42,36 @@ obligations_table = Table(
     Column("owner", String(128), nullable=False),
     Column("status", String(32), nullable=False),
     Column("priority", String(32), nullable=False),
+    Column("parent_obligation_id", String(64), nullable=True),
+    Column("trigger_event_date", String(32), nullable=True),
+    Column("due_window_start", String(32), nullable=True),
+    Column("due_window_end", String(32), nullable=True),
+    Column("due_label", String(128), nullable=True),
+    Column("closure_policy", String(64), nullable=True),
+    Column("protocol_code", String(64), nullable=True),
     Column("verified_by", String(128), nullable=True),
     Column("closure_evidence", Text, nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+_OBLIGATION_OPTIONAL_DEFAULTS: dict[str, Any] = {
+    "parent_obligation_id": None,
+    "trigger_event_date": None,
+    "due_window_start": None,
+    "due_window_end": None,
+    "due_label": None,
+    "closure_policy": "CLINICIAN_EVIDENCE",
+    "protocol_code": None,
+}
+
+_OBLIGATION_MIGRATION_DDL: tuple[str, ...] = (
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS parent_obligation_id VARCHAR(64)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS trigger_event_date VARCHAR(32)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS due_window_start VARCHAR(32)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS due_window_end VARCHAR(32)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS due_label VARCHAR(128)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS closure_policy VARCHAR(64)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS protocol_code VARCHAR(64)",
 )
 
 audit_events_table = Table(
@@ -132,7 +159,7 @@ PATIENT_COHORT_META: dict[str, dict[str, Any]] = {
         "patient_id": "PAT-AE-5180",
         "patient_name": "Fatima Al-Zaabi (Synthetic)",
         "age_sex": "29Y · F",
-        "clinical_track": "Metabolic & Varicella Continuity",
+        "clinical_track": "GDM Postpartum OGTT & Varicella",
         "facility_a": "Al Bateen Primary Clinic",
         "facility_b": "Corniche OB-GYN",
         "id_base": 200,
@@ -141,10 +168,28 @@ PATIENT_COHORT_META: dict[str, dict[str, Any]] = {
         "patient_id": "PAT-AE-6304",
         "patient_name": "Sara Al-Nuaimi (Synthetic)",
         "age_sex": "36Y · F",
-        "clinical_track": "Preeclampsia & HPV Continuity",
+        "clinical_track": "Postpartum BP & HPV Continuity",
         "facility_a": "Khalifa City Family Medicine",
         "facility_b": "Danat Al Emarat Maternity",
         "id_base": 300,
+    },
+    "PAT-AE-7415": {
+        "patient_id": "PAT-AE-7415",
+        "patient_name": "Mariam Al-Dhaheri (Synthetic)",
+        "age_sex": "31Y · F",
+        "clinical_track": "Perinatal Mental Health & Cervical Screening",
+        "facility_a": "Al Ain Primary Women's Clinic",
+        "facility_b": "Tawam OB-GYN & Perinatal Psychiatry",
+        "id_base": 400,
+    },
+    "PAT-AE-8529": {
+        "patient_id": "PAT-AE-8529",
+        "patient_name": "Hessa Al-Mazrouei (Synthetic)",
+        "age_sex": "27Y · F",
+        "clinical_track": "Endometriosis Evaluation Continuity",
+        "facility_a": "Yas Island Family Medicine",
+        "facility_b": "Cleveland Clinic Abu Dhabi Gynecology",
+        "id_base": 500,
     },
 }
 
@@ -164,6 +209,13 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "owner": "Primary Care / OB-GYN",
         "status": "OPEN",
         "priority": "HIGH",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-09-14",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": None,
+        "closure_policy": "CLINICIAN_EVIDENCE",
+        "protocol_code": "ATA-THYROID-T1",
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -182,6 +234,13 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "owner": "Preventive Care Nurse",
         "status": "OPEN",
         "priority": "MEDIUM",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-08-22",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": None,
+        "closure_policy": "CLINICIAN_EVIDENCE",
+        "protocol_code": "DOH-IMMUNE-MMR",
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -193,17 +252,25 @@ ADDITIONAL_SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "patient_id": "PAT-AE-5180",
         "patient_name": "Fatima Al-Zaabi (Synthetic)",
         "life_stage": "Preconception",
-        "title": "Preconception Dysglycemia Follow-up (Fasting Glucose 112 mg/dL · HbA1c 6.1%)",
+        "title": "GDM & Dysglycemia OGTT Follow-up (Fasting Glucose 112 mg/dL · HbA1c 6.1%)",
         "rationale": (
-            "Preconception panel showed impaired fasting glucose (112 mg/dL) and HbA1c 6.1%. "
-            "Requires early first-trimester 75g OGTT and medical nutrition / endocrine titration "
-            "upon pregnancy confirmation."
+            "Preconception panel showed impaired fasting glucose (112 mg/dL) and HbA1c 6.1% with "
+            "prior confirmed gestational diabetes (GDM). Requires early antenatal OGTT and, after "
+            "delivery, a protocol-timed postpartum 75g OGTT (ADA 2026: 4–12 weeks postpartum). "
+            "A booked appointment alone leaves testing open; result review is tracked separately."
         ),
         "evidence_source": "FHIR Observation/obs-hba1c-2026-09 (Malaffi HIE Synthetic)",
-        "rule_version": "RB-METABOLIC-v1.2.0",
+        "rule_version": "RB-METABOLIC-v2.0.0",
         "owner": "Primary Care / Endocrinology",
         "status": "OPEN",
         "priority": "HIGH",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-09-18",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": "Completed OGTT required (booking alone insufficient)",
+        "closure_policy": "COMPLETED_TEST_NOT_BOOKING",
+        "protocol_code": "ADA-2026-OGTT-4-12W",
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -223,6 +290,13 @@ ADDITIONAL_SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "owner": "Preventive Care Nurse",
         "status": "OPEN",
         "priority": "MEDIUM",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-08-27",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": None,
+        "closure_policy": "CLINICIAN_EVIDENCE",
+        "protocol_code": "DOH-IMMUNE-VZV",
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -231,17 +305,25 @@ ADDITIONAL_SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "patient_id": "PAT-AE-6304",
         "patient_name": "Sara Al-Nuaimi (Synthetic)",
         "life_stage": "Preconception",
-        "title": "Preeclampsia Low-Dose Aspirin Prophylaxis Window (BP 138/88 mmHg)",
+        "title": "Hypertensive Disorder & Postpartum BP Continuity (BP 138/88 mmHg)",
         "rationale": (
             "History of prior preterm preeclampsia and baseline BP 138/88 mmHg. Requires low-dose "
-            "aspirin (150 mg nightly) initiated between 12 and 16 weeks gestation before placental "
-            "remodeling window closes."
+            "aspirin (150 mg nightly) evaluation between 12 and 16 weeks gestation and structured "
+            "postpartum blood pressure follow-up after delivery (SMFM ≤72h target for severe HTN; "
+            "≤10-day remote BP monitoring achieves 92.2% capture vs 43.7% office-based)."
         ),
         "evidence_source": "FHIR Observation/obs-bp-2026-09 (Malaffi HIE Synthetic)",
-        "rule_version": "RB-PREECLAMPSIA-v1.3.0",
+        "rule_version": "RB-PREECLAMPSIA-v2.0.0",
         "owner": "Primary Care / Maternal-Fetal Medicine",
         "status": "OPEN",
         "priority": "HIGH",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-09-21",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": "BP assessment required · Severe readings escalate",
+        "closure_policy": "POSTPARTUM_BP_ASSESSMENT",
+        "protocol_code": "SMFM-72H-POSTPARTUM-BP",
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -261,6 +343,96 @@ ADDITIONAL_SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "owner": "Preventive Care Nurse",
         "status": "OPEN",
         "priority": "MEDIUM",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-08-29",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": None,
+        "closure_policy": "CLINICIAN_EVIDENCE",
+        "protocol_code": "DOH-IMMUNE-HPV",
+        "verified_by": None,
+        "closure_evidence": None,
+    },
+    {
+        "id": "OBL-401",
+        "patient_id": "PAT-AE-7415",
+        "patient_name": "Mariam Al-Dhaheri (Synthetic)",
+        "life_stage": "Preconception",
+        "title": "Positive Perinatal Depression & Anxiety Screen (EPDS 15 · GAD-7 12)",
+        "rationale": (
+            "Validated screening returned elevated scores (EPDS 15/30, GAD-7 12/21; Item 10 negative "
+            "at intake). Per ACOG guidelines, a questionnaire score is a screening signal rather than "
+            "a diagnosis or closure: requires structured clinical assessment, follow-up treatment/monitoring "
+            "linkage, and immediate routing to the approved urgent pathway if any safety concern arises."
+        ),
+        "evidence_source": "FHIR QuestionnaireResponse/qr-epds-2026-09 (Malaffi HIE Synthetic)",
+        "rule_version": "RB-PERINATAL-MH-v1.0.0",
+        "owner": "Perinatal Behavioral Health / OB-GYN",
+        "status": "OPEN",
+        "priority": "HIGH",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-09-25",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": "Clinical assessment required (score alone cannot close)",
+        "closure_policy": "MENTAL_HEALTH_ASSESSMENT",
+        "protocol_code": "ACOG-PERINATAL-MH",
+        "verified_by": None,
+        "closure_evidence": None,
+    },
+    {
+        "id": "OBL-402",
+        "patient_id": "PAT-AE-7415",
+        "patient_name": "Mariam Al-Dhaheri (Synthetic)",
+        "life_stage": "Preconception",
+        "title": "Abnormal Cervical Screening Follow-up (Pre-Pregnancy HPV16+ · HSIL Cytology)",
+        "rationale": (
+            "Pre-pregnancy cervical screening showed high-risk HPV16 positive with HSIL cytology and "
+            "no completed colposcopy on record. Inadequate follow-up ranges from 4%–75% across care "
+            "settings. Must reconcile original HPV/cytology result, interim procedures, and pregnancy "
+            "status under Abu Dhabi DoH / ASCCP guidelines (colposcopy triage in pregnancy; ECC and "
+            "routine excisional treatment deferred until ≥6 weeks postpartum)."
+        ),
+        "evidence_source": "FHIR DiagnosticReport/rep-cervical-2026-07 (Malaffi HIE Synthetic)",
+        "rule_version": "RB-CERVICAL-v1.0.0",
+        "owner": "Colposcopy Clinic / OB-GYN",
+        "status": "OPEN",
+        "priority": "HIGH",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-07-19",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": "Reconcile HPV/cytology & pregnancy status (DoH / ASCCP)",
+        "closure_policy": "CERVICAL_ALGORITHM_RECONCILIATION",
+        "protocol_code": "DOH-AD-CERVICAL-PREG",
+        "verified_by": None,
+        "closure_evidence": None,
+    },
+    {
+        "id": "OBL-501",
+        "patient_id": "PAT-AE-8529",
+        "patient_name": "Hessa Al-Mazrouei (Synthetic)",
+        "life_stage": "Preconception",
+        "title": "Suspected Endometriosis Evaluation (3 Recurring Visits · Normal Pelvic Ultrasound)",
+        "rationale": (
+            "Three documented visits over 14 months for severe cyclic pelvic pain, dysmenorrhea "
+            "causing missed workdays, and deep dyspareunia. Recent transvaginal ultrasound reported "
+            "normal. WHO documents an average 4–12 year diagnostic delay; NICE NG73 advises that a "
+            "normal examination or ultrasound can coexist with endometriosis and specialist referral "
+            "signal must be preserved until evaluated under an approved gynecology pathway."
+        ),
+        "evidence_source": "FHIR Condition/cond-pelvic-pain-2026-09 (Malaffi HIE Synthetic)",
+        "rule_version": "RB-ENDO-v1.0.0",
+        "owner": "Gynecology / Endometriosis Referral Pathway",
+        "status": "OPEN",
+        "priority": "HIGH",
+        "parent_obligation_id": None,
+        "trigger_event_date": "2026-09-10",
+        "due_window_start": None,
+        "due_window_end": None,
+        "due_label": "Specialist review required (normal scan cannot close)",
+        "closure_policy": "ENDOMETRIOSIS_PATHWAY_REVIEW",
+        "protocol_code": "NICE-NG73-ENDO",
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -284,8 +456,8 @@ SEED_AUDIT_EVENTS: list[dict[str, Any]] = [
     {
         "obligation_id": "OBL-201",
         "event_type": "CARE_GAP_DETECTED",
-        "actor": "RuleEngine (RB-METABOLIC-v1.2.0)",
-        "summary": "Logged preconception dysglycemia (HbA1c 6.1%, FBG 112 mg/dL) obligation from FHIR Observation/obs-hba1c-2026-09.",
+        "actor": "RuleEngine (RB-METABOLIC-v2.0.0)",
+        "summary": "Logged GDM / preconception dysglycemia (HbA1c 6.1%, FBG 112 mg/dL) OGTT obligation from FHIR Observation/obs-hba1c-2026-09.",
     },
     {
         "obligation_id": "OBL-202",
@@ -296,14 +468,32 @@ SEED_AUDIT_EVENTS: list[dict[str, Any]] = [
     {
         "obligation_id": "OBL-301",
         "event_type": "CARE_GAP_DETECTED",
-        "actor": "RuleEngine (RB-PREECLAMPSIA-v1.3.0)",
-        "summary": "Logged preeclampsia low-dose aspirin window obligation (BP 138/88 mmHg) from FHIR Observation/obs-bp-2026-09.",
+        "actor": "RuleEngine (RB-PREECLAMPSIA-v2.0.0)",
+        "summary": "Logged hypertensive disorder & postpartum BP continuity obligation (BP 138/88 mmHg) from FHIR Observation/obs-bp-2026-09.",
     },
     {
         "obligation_id": "OBL-302",
         "event_type": "CARE_GAP_DETECTED",
         "actor": "RuleEngine (RB-HPV-v1.1.0)",
         "summary": "Logged incomplete HPV 9-valent series (Dose 2/3) from FHIR ImmunizationRecommendation/rec-hpv-2026-08.",
+    },
+    {
+        "obligation_id": "OBL-401",
+        "event_type": "CARE_GAP_DETECTED",
+        "actor": "RuleEngine (RB-PERINATAL-MH-v1.0.0)",
+        "summary": "Logged positive perinatal depression & anxiety screening signal (EPDS 15, GAD-7 12) from FHIR QuestionnaireResponse/qr-epds-2026-09.",
+    },
+    {
+        "obligation_id": "OBL-402",
+        "event_type": "CARE_GAP_DETECTED",
+        "actor": "RuleEngine (RB-CERVICAL-v1.0.0)",
+        "summary": "Logged pre-pregnancy abnormal cervical screening (HPV16+, HSIL cytology) reconciliation obligation from FHIR DiagnosticReport/rep-cervical-2026-07.",
+    },
+    {
+        "obligation_id": "OBL-501",
+        "event_type": "CARE_GAP_DETECTED",
+        "actor": "RuleEngine (RB-ENDO-v1.0.0)",
+        "summary": "Logged recurring pelvic pain & suspected endometriosis evaluation signal (3 visits · normal TVUS preserved per NICE NG73) from FHIR Condition/cond-pelvic-pain-2026-09.",
     },
 ]
 
@@ -398,6 +588,54 @@ SEED_CLINICAL_EVIDENCE: list[dict[str, Any]] = [
             "Registry #MAL-IMM-2026-71892); Dose 3 scheduled in 4 months."
         ),
     },
+    {
+        "id": "EVD-EPDS-2026-10",
+        "obligation_id": "OBL-401",
+        "fhir_resource_type": "ClinicalImpression",
+        "code_display": "Structured Perinatal Behavioral Health Assessment & Follow-up Plan",
+        "result_value": "Clinical assessment completed · No active safety concern · CBT + 4-week monitoring",
+        "reference_range": "ACOG screening -> clinical assessment -> treatment/monitoring",
+        "source_facility": "Tawam Perinatal Psychiatry · Malaffi HIE",
+        "accession_id": "MAL-BH-2026-44109",
+        "clinician_suggestion": "Dr. Huda Al-Mheiri (Perinatal Psychiatry)",
+        "summary_note": (
+            "Structured perinatal mental health clinical assessment completed following EPDS 15 / "
+            "GAD-7 12 screen (Accession #MAL-BH-2026-44109); safety screen negative, psychotherapy "
+            "treatment and 4-week follow-up monitoring plan established."
+        ),
+    },
+    {
+        "id": "EVD-CERV-2026-10",
+        "obligation_id": "OBL-402",
+        "fhir_resource_type": "Procedure",
+        "code_display": "Antenatal Colposcopy Triage (Abu Dhabi DoH / ASCCP Algorithm)",
+        "result_value": "Colposcopy completed · Invasive disease excluded · ECC deferred · Postpartum plan set",
+        "reference_range": "Rule out invasion in pregnancy; defer excision ≥6w postpartum",
+        "source_facility": "Tawam Colposcopy & OB-GYN Clinic · Malaffi HIE",
+        "accession_id": "MAL-COLP-2026-33912",
+        "clinician_suggestion": "Dr. Aisha Al-Shamsi (Gynecologic Oncology / OB-GYN)",
+        "summary_note": (
+            "Reconciled pre-pregnancy HPV16+/HSIL cytology with pregnancy status via specialist "
+            "colposcopy (Accession #MAL-COLP-2026-33912): invasive cancer excluded, no ECC performed, "
+            "definitive re-evaluation queued at ≥6 weeks postpartum per Abu Dhabi DoH / ASCCP."
+        ),
+    },
+    {
+        "id": "EVD-ENDO-2026-10",
+        "obligation_id": "OBL-501",
+        "fhir_resource_type": "DiagnosticReport",
+        "code_display": "Gynecology Endometriosis Specialist Pathway Review (NICE NG73)",
+        "result_value": "Specialist endometriosis clinic review completed · Pelvic MRI + pathway plan",
+        "reference_range": "Normal TVUS does not exclude endometriosis (NICE NG73)",
+        "source_facility": "Cleveland Clinic Abu Dhabi Gynecology · Malaffi HIE",
+        "accession_id": "MAL-GYN-2026-51208",
+        "clinician_suggestion": "Dr. Salma Al-Qubaisi (Complex Gynecology)",
+        "summary_note": (
+            "Specialist gynecology endometriosis clinic review completed despite prior normal pelvic "
+            "ultrasound (Accession #MAL-GYN-2026-51208); approved diagnostic pathway and specialist "
+            "pelvic MRI / longitudinal symptom management plan documented."
+        ),
+    },
 ]
 
 _MEMORY_STORE: list[dict[str, Any]] = [
@@ -423,9 +661,11 @@ def ensure_schema_and_seed() -> None:
     metadata.create_all(direct_engine)
     now = datetime.now(UTC)
     with direct_engine.begin() as conn:
+        for ddl in _OBLIGATION_MIGRATION_DDL:
+            conn.execute(text(ddl))
         existing_ids = {row[0] for row in conn.execute(select(obligations_table.c.id)).all()}
         missing_obls = [
-            {**item, "updated_at": now}
+            {**_OBLIGATION_OPTIONAL_DEFAULTS, **item, "updated_at": now}
             for item in ALL_SEED_OBLIGATIONS
             if item["id"] not in existing_ids
         ]
@@ -862,6 +1102,13 @@ def create_obligation(item: dict[str, Any]) -> dict[str, Any]:
         "owner": item.get("owner") or "OB-GYN / Primary Care",
         "status": item.get("status") or "OPEN",
         "priority": (item.get("priority") or "MEDIUM").upper(),
+        "parent_obligation_id": item.get("parent_obligation_id"),
+        "trigger_event_date": item.get("trigger_event_date"),
+        "due_window_start": item.get("due_window_start"),
+        "due_window_end": item.get("due_window_end"),
+        "due_label": item.get("due_label"),
+        "closure_policy": item.get("closure_policy") or "CLINICIAN_EVIDENCE",
+        "protocol_code": item.get("protocol_code"),
         "verified_by": None,
         "closure_evidence": None,
         "updated_at": now,

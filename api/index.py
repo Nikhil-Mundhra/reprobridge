@@ -1,10 +1,10 @@
 import json
 import os
 from collections.abc import Iterator
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Body, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -42,9 +42,12 @@ from api.privacy import (
 from api.workflow import (
     TransitionState,
     apply_uae_privacy_firewall,
+    build_followup_child_obligation,
     detect_open_obligations,
+    evaluate_incoming_evidence_safety,
     evaluate_life_stage_transition,
     transition_workflow,
+    validate_closure_policy,
 )
 
 app = FastAPI(
@@ -114,6 +117,14 @@ class EvidenceIntakeRequest(BaseModel):
     summary_note: str | None = Field(default=None, max_length=1000)
 
 
+class TransitionEventRequest(BaseModel):
+    delivery_date: str | None = Field(default=None, max_length=32)
+    protocol_override: str | None = Field(default=None, max_length=64)
+    discharge_diagnoses: list[str] = Field(default_factory=list, max_length=12)
+    bp_reading: dict[str, int] | str | None = None
+    screening_signal: dict[str, Any] | None = None
+
+
 def _filter_audit_events(
     obligations: list[dict[str, Any]], patient_id: str
 ) -> list[dict[str, Any]]:
@@ -121,21 +132,25 @@ def _filter_audit_events(
     return list_audit_events(obligation_ids=obl_ids)
 
 
-def _run_transition(event_type: str, patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
-    current = list_obligations(patient_id=patient_id)
-    result = transition_workflow.invoke(
-        {
-            "event_type": event_type,
-            "obligations": current,
-            "reassessed_updates": [],
-            "privacy_report": {},
-            "trace": [],
-            "agent_summary": "",
-            "specialist_handoff": "",
-            "ai_metadata": {},
-        }
-    )
-    for patch in result["reassessed_updates"]:
+def _build_event_context(
+    patient_id: str,
+    body: TransitionEventRequest | None,
+) -> dict[str, Any]:
+    meta = PATIENT_COHORT_META.get(patient_id, {})
+    ctx: dict[str, Any] = {"patient_id": patient_id}
+    if meta.get("patient_name"):
+        ctx["patient_name"] = meta["patient_name"]
+    if body is not None:
+        ctx.update(body.model_dump(exclude_none=True))
+    return ctx
+
+
+def _persist_transition_outcomes(
+    event_type: str,
+    reassessed_updates: list[dict[str, Any]],
+    spawned_obligations: list[dict[str, Any]],
+) -> None:
+    for patch in reassessed_updates:
         patch_copy = dict(patch)
         obl_id = patch_copy.pop("id")
         updated = update_obligation(obl_id, patch_copy)
@@ -149,6 +164,44 @@ def _run_transition(event_type: str, patient_id: str = "PAT-AE-4092") -> dict[st
                 ),
                 obligation_id=obl_id,
             )
+    for new_obl in spawned_obligations:
+        created = create_obligation(new_obl)
+        append_audit_event(
+            event_type="CARE_GAP_DETECTED",
+            actor=f"RuleEngine ({created['rule_version']})",
+            summary=(
+                f"Created postpartum obligation {created['id']} from {event_type} discharge "
+                f"diagnosis ({created.get('due_label') or created['priority']})."
+            ),
+            obligation_id=created["id"],
+        )
+
+
+def _run_transition(
+    event_type: str,
+    patient_id: str = "PAT-AE-4092",
+    body: TransitionEventRequest | None = None,
+) -> dict[str, Any]:
+    current = list_obligations(patient_id=patient_id)
+    result = transition_workflow.invoke(
+        {
+            "event_type": event_type,
+            "obligations": current,
+            "reassessed_updates": [],
+            "privacy_report": {},
+            "trace": [],
+            "agent_summary": "",
+            "specialist_handoff": "",
+            "ai_metadata": {},
+            "event_context": _build_event_context(patient_id, body),
+            "spawned_obligations": [],
+        }
+    )
+    _persist_transition_outcomes(
+        event_type,
+        result["reassessed_updates"],
+        result.get("spawned_obligations") or [],
+    )
 
     # Record the de-identified AI brief via the governed Neon MCP tool layer.
     call_mcp_tool(
@@ -183,7 +236,11 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
-def _stream_transition_events(event_type: str, patient_id: str = "PAT-AE-4092") -> Iterator[str]:
+def _stream_transition_events(
+    event_type: str,
+    patient_id: str = "PAT-AE-4092",
+    body: TransitionEventRequest | None = None,
+) -> Iterator[str]:
     """Run deterministic steps first (yielding immediately), then stream OpenRouter tokens."""
     current = list_obligations(patient_id=patient_id)
     state: TransitionState = {
@@ -195,6 +252,8 @@ def _stream_transition_events(event_type: str, patient_id: str = "PAT-AE-4092") 
         "agent_summary": "",
         "specialist_handoff": "",
         "ai_metadata": {},
+        "event_context": _build_event_context(patient_id, body),
+        "spawned_obligations": [],
     }
 
     # Nodes 1-3: Deterministic clinical rules + UAE Privacy Firewall
@@ -205,21 +264,12 @@ def _stream_transition_events(event_type: str, patient_id: str = "PAT-AE-4092") 
     ):
         state = {**state, **node(state)}  # LangGraph nodes return partial state dicts
 
-    # Persist deterministic obligation updates immediately
-    for patch in state["reassessed_updates"]:
-        patch_copy = dict(patch)
-        obl_id = patch_copy.pop("id")
-        updated = update_obligation(obl_id, patch_copy)
-        if updated:
-            append_audit_event(
-                event_type="LIFE_STAGE_TRANSITION",
-                actor="Deterministic Rule Engine",
-                summary=(
-                    f"{obl_id} transitioned under {event_type} to "
-                    f"{updated['status']} ({updated['priority']})."
-                ),
-                obligation_id=obl_id,
-            )
+    # Persist deterministic obligation updates & discharge-diagnosis spawns immediately
+    _persist_transition_outcomes(
+        event_type,
+        state["reassessed_updates"],
+        state.get("spawned_obligations") or [],
+    )
 
     mid_obls = list_obligations(patient_id=patient_id)
     yield _sse(
@@ -498,38 +548,67 @@ def add_obligation_evidence(obligation_id: str, body: EvidenceIntakeRequest):
         summary=f"Recorded {record['fhir_resource_type']} evidence ({ev_id}) for {obligation_id}: {record['result_value']}",
         obligation_id=obligation_id,
     )
+    safety_action = evaluate_incoming_evidence_safety(
+        existing, record["result_value"], record["summary_note"]
+    )
+    updated_obligation = existing
+    if safety_action is not None:
+        if safety_action.get("patch"):
+            patched = update_obligation(obligation_id, safety_action["patch"])
+            if patched:
+                updated_obligation = patched
+        append_audit_event(
+            event_type=safety_action["event_type"],
+            actor=safety_action["actor"],
+            summary=safety_action["summary"],
+            obligation_id=obligation_id,
+        )
     pid = str(existing.get("patient_id") or "PAT-AE-4092")
     obls = list_obligations(patient_id=pid)
     return {
         "record": record,
         "evidence": list_evidence_for_obligation(obligation_id),
+        "obligation": updated_obligation,
+        "safety_action": safety_action,
         "audit_events": _filter_audit_events(obls, pid),
     }
 
 
 @app.post("/api/transitions/pregnancy")
-def trigger_pregnancy_transition(patient_id: str = "PAT-AE-4092"):
-    return _run_transition("FHIR_PREGNANCY_CONFIRMED", patient_id=patient_id)
+def trigger_pregnancy_transition(
+    patient_id: str = "PAT-AE-4092",
+    body: Annotated[TransitionEventRequest | None, Body()] = None,
+):
+    return _run_transition("FHIR_PREGNANCY_CONFIRMED", patient_id=patient_id, body=body)
 
 
 @app.post("/api/transitions/pregnancy/stream")
-def stream_pregnancy_transition(patient_id: str = "PAT-AE-4092"):
+def stream_pregnancy_transition(
+    patient_id: str = "PAT-AE-4092",
+    body: Annotated[TransitionEventRequest | None, Body()] = None,
+):
     return StreamingResponse(
-        _stream_transition_events("FHIR_PREGNANCY_CONFIRMED", patient_id=patient_id),
+        _stream_transition_events("FHIR_PREGNANCY_CONFIRMED", patient_id=patient_id, body=body),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
 @app.post("/api/transitions/postpartum")
-def trigger_postpartum_transition(patient_id: str = "PAT-AE-4092"):
-    return _run_transition("FHIR_DELIVERY_POSTPARTUM", patient_id=patient_id)
+def trigger_postpartum_transition(
+    patient_id: str = "PAT-AE-4092",
+    body: Annotated[TransitionEventRequest | None, Body()] = None,
+):
+    return _run_transition("FHIR_DELIVERY_POSTPARTUM", patient_id=patient_id, body=body)
 
 
 @app.post("/api/transitions/postpartum/stream")
-def stream_postpartum_transition(patient_id: str = "PAT-AE-4092"):
+def stream_postpartum_transition(
+    patient_id: str = "PAT-AE-4092",
+    body: Annotated[TransitionEventRequest | None, Body()] = None,
+):
     return StreamingResponse(
-        _stream_transition_events("FHIR_DELIVERY_POSTPARTUM", patient_id=patient_id),
+        _stream_transition_events("FHIR_DELIVERY_POSTPARTUM", patient_id=patient_id, body=body),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -542,23 +621,24 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
     )
     if existing is None:
         raise HTTPException(status_code=404, detail="Clinical obligation not found")
-    if existing["status"] == "DEFERRED_TO_POSTPARTUM":
-        rule_ver = existing.get("rule_version") or "RB-IMMUNE-v1.2.1"
+
+    guard = validate_closure_policy(existing, body.closure_evidence)
+    if not guard.allowed:
+        rule_ver = str(existing.get("rule_version") or "RB-SAFETY-v1.0.0")
+        if guard.escalation_patch:
+            update_obligation(obligation_id, guard.escalation_patch)
         append_audit_event(
-            event_type="CLINICAL_SAFETY_BLOCKED",
+            event_type=guard.audit_event_type,
             actor=f"SafetyGuard ({rule_ver})",
             summary=(
-                f"Blocked premature closure of {obligation_id} requested by {body.clinician_name}: "
-                "pregnancy-deferred immunization obligation is contraindicated during pregnancy and remains queued for postpartum."
+                f"Blocked closure of {obligation_id} requested by {body.clinician_name}: "
+                f"{guard.reason}"
             ),
             obligation_id=obligation_id,
         )
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Clinical safety guard: pregnancy-deferred immunization obligation is contraindicated during "
-                "pregnancy and cannot be closed until the Postpartum transition is triggered."
-            ),
+            detail=guard.reason or "Clinical safety guard blocked premature closure.",
         )
 
     updated = update_obligation(
@@ -577,9 +657,26 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
         obligation_id=obligation_id,
     )
     patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
+    existing_ids = {str(o["id"]) for o in list_obligations(patient_id="ALL")}
+    child_spec = build_followup_child_obligation(existing, body.closure_evidence, existing_ids)
+    spawned_obligation: dict[str, Any] | None = None
+    if child_spec is not None:
+        spawned_obligation = create_obligation(child_spec)
+        append_audit_event(
+            event_type="CHILD_OBLIGATION_CREATED",
+            actor=f"RuleEngine ({spawned_obligation['rule_version']})",
+            summary=(
+                f"Created linked follow-up obligation {spawned_obligation['id']} from "
+                f"{obligation_id}: {spawned_obligation['title']}."
+            ),
+            obligation_id=spawned_obligation["id"],
+        )
+
     obls = list_obligations(patient_id=patient_id)
     return {
         "obligation": updated,
+        "spawned_obligation": spawned_obligation,
+        "obligations": obls,
         "audit_events": _filter_audit_events(obls, patient_id),
         "patients": list_patient_summaries(),
         "cohort_totals": query_patients(limit=1)["cohort_totals"],

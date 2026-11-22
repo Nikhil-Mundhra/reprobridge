@@ -52,8 +52,12 @@ DEFAULT_ELEVENLABS_MODEL_ID = "eleven_v4"
 _CLINICAL_SAFETY_RULES = (
     "You do NOT diagnose, prescribe, or recommend initiating or dosing any medication "
     "(say 'evaluate need for specialist management or titration per OB-GYN protocol' instead of naming drug initiation). "
-    "Mention ONLY conditions, labs, and vaccines explicitly present in the input payload—never invent or substitute another vaccine or condition (e.g., do not mention varicella unless varicella is in the payload). "
-    "Align all timing strictly with deterministic SLAs: urgent first-trimester escalations are due within ≤ 72 hours; postpartum reactivations are due ≤ 48 hours pre-discharge. "
+    "Mention ONLY conditions, labs, screenings, and vaccines explicitly present in the input payload—never invent or substitute another vaccine or condition (e.g., do not mention varicella unless varicella is in the payload). "
+    "Align all timing strictly with each obligation's deterministic due_label and protocol_code in the payload "
+    "(for example: ≤ 72h for first-trimester escalations or SMFM severe postpartum hypertension, ≤ 10 days for remote postpartum BP monitoring, "
+    "4–12 weeks postpartum for ADA 2026 75g GDM OGTT or locally adopted delivery-admission protocol, pre-discharge ≤ 48h for deferred postpartum immunizations, "
+    "≥ 6 weeks postpartum for deferred cervical re-evaluation, or immediate urgent pathway for documented mental-health safety concerns). "
+    "Never suggest closing an obligation from a booked appointment alone, a screening score alone, or a normal pelvic ultrasound in suspected endometriosis. "
     "All clinical actions require clinician sign-off."
 )
 
@@ -179,13 +183,15 @@ def _deterministic_fallback(payload: dict[str, Any], reason: str) -> dict[str, A
         status = str(obl.get("status", "OPEN"))
         priority = str(obl.get("priority", "MEDIUM"))
         owner = str(obl.get("owner_specialty", "OB-GYN"))
+        due_label = str(obl.get("due_label") or "").strip()
+        due_suffix = f" · Target: {due_label}" if due_label else ""
         if status == "DEFERRED_TO_POSTPARTUM":
             bullets.append(
-                f"• Keep {oid} ({cat}) preserved on the postpartum pathway pending pregnancy completion ({owner})."
+                f"• Keep {oid} ({cat}) preserved on the postpartum pathway pending pregnancy completion ({owner}{due_suffix})."
             )
         else:
             bullets.append(
-                f"• Review {priority} obligation {oid} ({cat}) with {owner} and verify qualifying evidence before closure."
+                f"• Review {priority} obligation {oid} ({cat}) with {owner}{due_suffix} and verify qualifying evidence before closure."
             )
 
     return {
@@ -484,29 +490,44 @@ def _deterministic_explain_fallback(
             ],
         ),
         "gestational_dysglycemia_ogtt_followup": (
-            f"Preconception Dysglycemia & Glucose Monitoring ({life_stage})",
+            f"GDM & Dysglycemia OGTT Follow-up ({life_stage})",
             (
-                "Borderline fasting glucose or HbA1c before conception raises the likelihood of gestational diabetes "
-                "as placental insulin resistance increases. Early oral glucose tolerance testing allows the endocrinology "
-                f"and {owner} teams to intervene promptly when thresholds shift."
+                "Elevated fasting glucose, HbA1c, or confirmed gestational diabetes carries a high risk of persistent "
+                "glucose intolerance after delivery. ADA 2026 recommends a fasting 75-gram oral glucose tolerance test "
+                "at 4 to 12 weeks postpartum, or according to the locally adopted delivery-admission protocol. "
+                f"Under {owner} coordination, a booked appointment alone leaves the testing obligation open, and result review is tracked separately."
             ),
             [
-                "Standard preconception fasting glucose target is under 100 mg/dL and HbA1c under 5.7%.",
-                "Pregnancy tightens fasting glycemic targets below 95 mg/dL to protect fetal growth.",
-                "Requires formal OGTT confirmation and clinician-approved management review.",
+                "ADA 2026 recommends a 75g OGTT at 4–12 weeks postpartum (or locally adopted delivery-admission protocol).",
+                "A booked appointment or lab order does not close the testing obligation; completed test evidence is required.",
+                "Completing postpartum OGTT automatically tracks clinician result review as a separate linked obligation.",
+            ],
+        ),
+        "postpartum_gdm_ogtt_result_review": (
+            f"Postpartum OGTT Result Review & Long-Term Plan ({life_stage})",
+            (
+                "Completing the postpartum glucose tolerance test is only the first half of care continuity; results "
+                "must be formally reviewed against non-pregnancy criteria and translated into a follow-up plan. "
+                f"{owner} signs off on the interpretation and documents ongoing 1 to 3 year diabetes screening."
+            ),
+            [
+                "Tracked separately from test completion so abnormal postpartum OGTT results are never overlooked.",
+                "Requires clinician sign-off on non-pregnancy glycemic interpretation and follow-up plan.",
+                "History of gestational diabetes warrants lifelong screening every 1 to 3 years.",
             ],
         ),
         "preeclampsia_prophylaxis_window": (
-            f"Preeclampsia Risk & Prophylaxis Timing ({life_stage})",
+            f"Hypertensive Disorder & Postpartum BP Continuity ({life_stage})",
             (
-                "Elevated baseline blood pressure combined with obstetric history indicates a time-sensitive window "
-                "for preventive maternal-fetal follow-up. Guidelines emphasize evaluating low-dose aspirin prophylaxis "
-                "between 12 and 16 weeks gestation before spiral-artery remodeling completes."
+                "Hypertensive disorders of pregnancy remain a leading cause of postpartum readmission after hospital discharge. "
+                "SMFM recommends blood pressure reassessment within 72 hours of discharge for severe hypertension, and randomized "
+                "trial evidence shows text-based remote monitoring achieves 92.2 percent 10-day capture compared with 43.7 percent "
+                f"for office visits alone. {owner} verifies actual readings and routes severe elevations through the local escalation protocol."
             ),
             [
-                "Prophylaxis evaluation window sits between 12 and 16 weeks of pregnancy.",
-                "Baseline blood pressure readings are tracked against standard (<120/80) and preeclampsia (>=140/90) cutoffs.",
-                f"Coordinated by {owner} pending clinician order verification.",
+                "SMFM targets ≤72-hour post-discharge BP check for severe hypertension; remote monitoring boosts 10-day capture to 92.2%.",
+                "A scheduled visit alone cannot close this obligation—an actual blood pressure assessment is required.",
+                "Qualifying severe readings (≥160/110 mmHg or severe features) escalate immediately to the local urgent protocol.",
             ],
         ),
         "hpv_series_postpartum_completion": (
@@ -520,6 +541,61 @@ def _deterministic_explain_fallback(
                 "Routine HPV vaccination is postponed during pregnancy without restarting prior doses.",
                 f"Current tracking status ({status}) carries remaining dose history into postpartum care.",
                 "Closes once remaining series doses are documented and verified.",
+            ],
+        ),
+        "perinatal_depression_anxiety_followup": (
+            f"Perinatal Depression & Anxiety Follow-up ({life_stage})",
+            (
+                "Positive perinatal screening scores highlight elevated risk for depression or anxiety across pregnancy "
+                "and postpartum, where care gaps frequently occur between screening and treatment. Per ACOG guidance, "
+                "a questionnaire score is a screening signal rather than a diagnosis or closure; it requires clinical "
+                f"assessment with {owner}, and any documented safety concern routes immediately through the approved urgent pathway."
+            ),
+            [
+                "Questionnaire scores (EPDS/GAD-7) are screening signals only and cannot close the obligation alone.",
+                "Requires documented clinical assessment plus a treatment and longitudinal monitoring plan.",
+                "Any documented safety concern triggers deterministic routing to the approved urgent safety pathway.",
+            ],
+        ),
+        "perinatal_mental_health_monitoring": (
+            f"Perinatal Mental Health Treatment Monitoring ({life_stage})",
+            (
+                "Following initial clinical assessment for perinatal depression or anxiety, longitudinal follow-up "
+                "ensures symptoms improve and treatment barriers are addressed. "
+                f"{owner} tracks repeat screening and care engagement before closing the monitoring cycle."
+            ),
+            [
+                "Linked to the prior clinical assessment to close the perinatal depression treatment cascade.",
+                "Tracks follow-up symptom trajectory and engagement with specialist-directed care.",
+                "Requires clinician verification of follow-up assessment before closure.",
+            ],
+        ),
+        "abnormal_cervical_screening_followup": (
+            f"Abnormal Cervical Screening Reconciliation ({life_stage})",
+            (
+                "Inadequate follow-up after abnormal cervical screening ranges widely across outpatient clinics, "
+                "especially when pregnancy interrupts care. Under Abu Dhabi Department of Health and ASCCP algorithms, "
+                "the care team reconciles the original HPV and cytology result, any interim procedures, and current "
+                f"pregnancy status so {owner} evaluates invasive risk safely while deferring excisional treatment until postpartum."
+            ),
+            [
+                "Reconciles original pre-pregnancy HPV/cytology results, interim procedures, and current pregnancy status.",
+                "Colposcopy triage is safe during pregnancy; endocervical curettage and routine excision are deferred ≥6 weeks postpartum.",
+                "Antenatal triage closure automatically preserves a linked postpartum re-evaluation obligation.",
+            ],
+        ),
+        "endometriosis_symptom_evaluation": (
+            f"Suspected Endometriosis Evaluation Pathway ({life_stage})",
+            (
+                "Recurring pelvic pain and severe menstrual symptoms take an average of 4 to 12 years to diagnose "
+                "worldwide according to the WHO. NICE guidance emphasizes that a normal physical examination or normal "
+                "pelvic ultrasound can coexist with endometriosis, so ReproBridge preserves this referral signal for "
+                f"{owner} until specialist evaluation is formally completed."
+            ),
+            [
+                "WHO documents a 4 to 12 year average diagnostic delay driven by dismissed recurring pain signals.",
+                "Per NICE NG73, a normal pelvic ultrasound or exam alone CANNOT close this obligation.",
+                "Requires documented specialist gynecology review under an approved endometriosis pathway.",
             ],
         ),
     }
@@ -987,6 +1063,81 @@ def _build_base_reconciliation_questions(
         context_note = (
             "Confirm gestational week (critical for the 12–16 week preeclampsia window) and home BP readings "
             "before opening the obligation passport."
+        )
+    elif {
+        "perinatal_depression_anxiety_followup",
+        "abnormal_cervical_screening_followup",
+    } & categories:
+        q2 = {
+            "id": "medications",
+            "category": "Care & Medication Reconciliation",
+            "question": (
+                "Are any behavioral health therapies, supportive care plans, or outside clinic "
+                "prescriptions active today that differ from the HIE record?"
+            ),
+            "data_shows": "HIE Record: Prenatal folate · Behavioral health & colposcopy follow-ups open",
+            "options": [
+                "Matches HIE data — no outside behavioral health or procedure updates",
+                "Started counseling or specialist therapy at an outside clinic",
+                "Outside procedure or medication change needs reconciliation",
+            ],
+            "placeholder": "Confirm behavioral health support, medications, or outside procedures...",
+        }
+        q3 = {
+            "id": "scenario_specific",
+            "category": "Mental Health & Cervical Screening Check",
+            "question": (
+                "HIE shows an elevated EPDS/GAD-7 screening signal (OBL-401) and pre-pregnancy "
+                "HPV16+/HSIL cytology (OBL-402). Are there any acute safety concerns today or "
+                "completed colposcopy reports from another facility?"
+            ),
+            "data_shows": "Documents: EPDS 15 · GAD-7 12 · Pre-pregnancy HPV16+ / HSIL cytology",
+            "options": [
+                "No safety concern today; clinical assessment and colposcopy triage still needed",
+                "Safety concern identified — route immediately to approved urgent pathway",
+                "Outside colposcopy report available for reconciliation",
+            ],
+            "placeholder": "Document safety screen status or prior colposcopy/biopsy dates...",
+        }
+        context_note = (
+            "Verify safety status for the positive perinatal screen and reconcile pre-pregnancy "
+            "abnormal HPV/cytology against current pregnancy status before updating obligations."
+        )
+    elif "endometriosis_symptom_evaluation" in categories:
+        q2 = {
+            "id": "medications",
+            "category": "Symptom Management Reconciliation",
+            "question": (
+                "What symptom-relief or gynecologic treatments are currently in use, and do they "
+                "differ from the clinic record?"
+            ),
+            "data_shows": "HIE Record: Recurrent pelvic pain visits · Prior normal pelvic ultrasound",
+            "options": [
+                "Matches HIE data — recurring pelvic pain remains unresolved",
+                "Using outside pain management or hormonal therapy with partial relief",
+                "Discontinued prior regimen due to side effects or pregnancy planning",
+            ],
+            "placeholder": "Confirm active symptom management vs HIE record...",
+        }
+        q3 = {
+            "id": "scenario_specific",
+            "category": "Endometriosis Referral Signal Check",
+            "question": (
+                "HIE documents 3 recurring pelvic pain visits and a normal transvaginal ultrasound "
+                "(OBL-501). Have symptoms persisted or has a specialist gynecology endometriosis "
+                "review been completed?"
+            ),
+            "data_shows": "Documents: 3 pelvic pain visits · Normal TVUS (does not exclude endometriosis)",
+            "options": [
+                "Symptoms persist — preserve referral signal for specialist gynecology review",
+                "Normal scan noted, no specialist visit yet (keep pathway active per NICE NG73)",
+                "Specialist endometriosis clinic review completed externally",
+            ],
+            "placeholder": "Note functional impact, missed workdays, or specialist MRI/referral status...",
+        }
+        context_note = (
+            "Confirm ongoing symptom impact and specialist review status so a normal pelvic "
+            "ultrasound never closes suspected endometriosis evaluation prematurely."
         )
     else:
         q2 = {
