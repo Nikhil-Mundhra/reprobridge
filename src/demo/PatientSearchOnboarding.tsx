@@ -469,8 +469,8 @@ export default function PatientSearchOnboarding({
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-800">
-              <CheckCircle2 className="h-3.5 w-3.5 text-teal-600" aria-hidden="true" />
+            <span className="inline-flex items-center gap-2 text-base font-bold text-teal-800 sm:text-lg">
+              <CheckCircle2 className="h-5 w-5 text-teal-600" aria-hidden="true" />
               {step === "search"
                 ? "Step 1 of 2 · Patient Search"
                 : "Step 2 of 2 · AI Scenario Reconciliation"}
