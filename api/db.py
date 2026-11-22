@@ -472,7 +472,7 @@ def check_database_health() -> dict[str, Any]:
             "pooled": "-pooler" in os.getenv("DATABASE_URL", ""),
             "detail": "Connected to Neon PostgreSQL.",
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 -- health probe: report any driver/DNS/auth failure as disconnected
         return {
             "provider": "neon-postgres",
             "connected": False,

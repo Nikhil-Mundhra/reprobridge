@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from api.db import SEED_OBLIGATIONS
+from api.db import ALL_SEED_OBLIGATIONS, SEED_OBLIGATIONS
 from api.privacy import (
     PrivacyViolationError,
     assert_phi_free,
@@ -105,10 +105,36 @@ def test_build_obligation_explain_payload_scrubs_phi_and_passes_firewall():
 
 def test_scrub_explanation_for_tts_redacts_phi_before_audio_egress():
     raw_text = (
-        "Amina Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, "
-        "shows elevated TSH 4.8 mIU/L."
+        "Amina Al-Mansoori (PAT-AE-4092), EID 784-1992-1234567-1, shows elevated TSH 4.8 mIU/L."
     )
     scrubbed = scrub_explanation_for_tts(raw_text, SEED_OBLIGATIONS[0])
     for leaked in ("Amina", "Al-Mansoori", "PAT-AE-4092", "784-1992-1234567-1"):
         assert leaked not in scrubbed
     assert "4.8 mIU/L" in scrubbed
+
+
+def test_explain_payload_redacts_medication_directives_but_keeps_lab_values():
+    preeclampsia_obl = next(o for o in ALL_SEED_OBLIGATIONS if o["id"] == "OBL-301")
+    report = build_obligation_explain_payload(preeclampsia_obl)
+    serialized = json.dumps(report["payload"]).lower()
+    assert "aspirin" not in serialized
+    assert "150 mg" not in serialized
+    assert report["payload"]["obligation"]["clinical_category"] == (
+        "preeclampsia_prophylaxis_window"
+    )
+
+    thyroid_obl = {
+        **SEED_OBLIGATIONS[0],
+        "rationale": (
+            "TSH 4.8 mIU/L exceeds target (<2.5 mIU/L); FBG 112 mg/dL. "
+            "Urgent levothyroxine 50 mcg daily evaluation."
+        ),
+    }
+    rationale = build_obligation_explain_payload(thyroid_obl)["payload"]["obligation"][
+        "clinical_rationale"
+    ]
+    assert "levothyroxine" not in rationale.lower()
+    assert "50 mcg" not in rationale
+    assert "4.8 mIU/L" in rationale
+    assert "112 mg/dL" in rationale
+    assert "specialist-directed therapy" in rationale

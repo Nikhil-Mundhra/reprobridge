@@ -28,11 +28,17 @@ from api.openrouter import (
     DEFAULT_ELEVENLABS_MODEL_ID,
     DEFAULT_OPENROUTER_MODEL,
     explain_deidentified_obligation,
+    generate_reconciliation_questions,
     stream_deidentified_brief,
     stream_deidentified_explanation,
+    stream_reconciliation_questions,
     synthesize_elevenlabs_audio,
 )
-from api.privacy import build_obligation_explain_payload, scrub_explanation_for_tts
+from api.privacy import (
+    build_obligation_explain_payload,
+    build_reconciliation_questionnaire_payload,
+    scrub_explanation_for_tts,
+)
 from api.workflow import (
     TransitionState,
     apply_uae_privacy_firewall,
@@ -63,6 +69,17 @@ class VerifyClosureRequest(BaseModel):
 
 class ExplainAudioRequest(BaseModel):
     text: str = Field(..., min_length=4, max_length=2500)
+
+
+class ReconcileSubmitRequest(BaseModel):
+    pregnancy_stage_answer: str = Field(..., min_length=2, max_length=300)
+    target_life_stage: str = Field(default="AUTO", max_length=80)
+    medications_answer: str = Field(..., min_length=2, max_length=400)
+    scenario_answer: str = Field(default="", max_length=400)
+    additional_info: str = Field(default="", max_length=600)
+    clinician_name: str = Field(
+        default="Dr. Layla Al-Hashimi (OB-GYN)", min_length=2, max_length=120
+    )
 
 
 class ObligationIntakeItem(BaseModel):
@@ -238,6 +255,15 @@ def _stream_transition_events(event_type: str, patient_id: str = "PAT-AE-4092") 
         }
 
     final_trace = list(state["trace"])
+    if synthesis["mode"] != "openrouter":
+        synth_detail = "Drafted clinician handoff brief via local deterministic fallback."
+    elif synthesis.get("fallback_reason"):
+        synth_detail = (
+            "Drafted summary via OpenRouter; specialist handoff substituted from deterministic "
+            "checklist (model omitted HANDOFF section). Requires OB-GYN sign-off."
+        )
+    else:
+        synth_detail = "Drafted clinician handoff brief via OpenRouter for OB-GYN sign-off."
     final_trace.append(
         {
             "node": "synthesize_coordination_brief",
@@ -245,11 +271,7 @@ def _stream_transition_events(event_type: str, patient_id: str = "PAT-AE-4092") 
             if synthesis["mode"] == "openrouter"
             else "deterministic_fallback",
             "phi_exposed": False,
-            "detail": (
-                "Drafted clinician handoff brief via OpenRouter for OB-GYN sign-off."
-                if synthesis["mode"] == "openrouter"
-                else "Drafted clinician handoff brief via local deterministic fallback."
-            ),
+            "detail": synth_detail,
         }
     )
 
@@ -709,3 +731,171 @@ def mcp_jsonrpc(payload: dict[str, Any]):
 @app.post("/api/demo/reset")
 def reset_demo(patient_id: str = "PAT-AE-4092"):
     return reset_obligations(patient_id=patient_id)
+
+
+def _infer_reconciled_life_stage(
+    target_life_stage: str,
+    pregnancy_stage_answer: str,
+    current_obligations: list[dict[str, Any]],
+) -> str:
+    explicit = target_life_stage.strip()
+    if explicit in {"Preconception", "Antenatal (Trimester 1)", "Postpartum"}:
+        return explicit
+    lowered = pregnancy_stage_answer.lower()
+    if any(tok in lowered for tok in ("postpartum", "deliver", "post-delivery")):
+        return "Postpartum"
+    if any(tok in lowered for tok in ("preconception", "not pregnant", "not currently pregnant")):
+        return "Preconception"
+    if any(
+        tok in lowered
+        for tok in ("week", "wk", "antenatal", "trimester", "pregnant", "gestation", "scan", "crl")
+    ):
+        return "Antenatal (Trimester 1)"
+    if current_obligations:
+        return str(current_obligations[0].get("life_stage") or "Preconception")
+    return "Preconception"
+
+
+@app.post("/api/patients/{patient_id}/reconcile-questions")
+def get_patient_reconcile_questions(patient_id: str):
+    obls = list_obligations(patient_id=patient_id)
+    if not obls and patient_id not in PATIENT_COHORT_META:
+        raise HTTPException(status_code=404, detail="Patient record not found")
+
+    privacy_report = build_reconciliation_questionnaire_payload(obls, patient_id=patient_id)
+    result = generate_reconciliation_questions(privacy_report["payload"])
+    return {
+        "patient_id": patient_id,
+        "context_note": result["context_note"],
+        "questions": result["questions"],
+        "disclaimer": result["disclaimer"],
+        "ai_metadata": result["ai_metadata"],
+        "privacy_report": privacy_report,
+    }
+
+
+def _stream_reconcile_questions_sse(patient_id: str, obls: list[dict[str, Any]]) -> Iterator[str]:
+    privacy_report = build_reconciliation_questionnaire_payload(obls, patient_id=patient_id)
+    yield _sse(
+        "firewall_verified",
+        {
+            "patient_id": patient_id,
+            "privacy_report": privacy_report,
+        },
+    )
+
+    result: dict[str, Any] | None = None
+    for chunk in stream_reconciliation_questions(privacy_report["payload"]):
+        if chunk["type"] == "token":
+            yield _sse("token", {"delta": chunk["delta"], "model": chunk["model"]})
+        elif chunk["type"] == "done":
+            result = chunk["result"]
+
+    if result is None:
+        result = generate_reconciliation_questions(privacy_report["payload"])
+
+    yield _sse(
+        "complete",
+        {
+            "patient_id": patient_id,
+            "context_note": result["context_note"],
+            "questions": result["questions"],
+            "disclaimer": result["disclaimer"],
+            "ai_metadata": result["ai_metadata"],
+            "privacy_report": privacy_report,
+        },
+    )
+
+
+@app.post("/api/patients/{patient_id}/reconcile-questions/stream")
+def stream_patient_reconcile_questions(patient_id: str) -> StreamingResponse:
+    obls = list_obligations(patient_id=patient_id)
+    if not obls and patient_id not in PATIENT_COHORT_META:
+        raise HTTPException(status_code=404, detail="Patient record not found")
+    return StreamingResponse(
+        _stream_reconcile_questions_sse(patient_id, obls),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/patients/{patient_id}/reconcile-submit")
+def submit_patient_reconciliation(patient_id: str, body: ReconcileSubmitRequest):
+    current = list_obligations(patient_id=patient_id)
+    if not current and patient_id not in PATIENT_COHORT_META:
+        raise HTTPException(status_code=404, detail="Patient record not found")
+
+    target_stage = _infer_reconciled_life_stage(
+        body.target_life_stage, body.pregnancy_stage_answer, current
+    )
+    is_curr_postpartum = any(str(o.get("life_stage")) == "Postpartum" for o in current)
+    is_curr_antenatal = not is_curr_postpartum and any(
+        str(o.get("life_stage", "")).startswith("Antenatal") for o in current
+    )
+
+    transition_triggered: str | None = None
+    transition_result: dict[str, Any] | None = None
+    if (
+        target_stage == "Antenatal (Trimester 1)"
+        and not is_curr_antenatal
+        and not is_curr_postpartum
+    ):
+        transition_triggered = "FHIR_PREGNANCY_CONFIRMED"
+        transition_result = _run_transition("FHIR_PREGNANCY_CONFIRMED", patient_id=patient_id)
+    elif target_stage == "Postpartum" and not is_curr_postpartum:
+        transition_triggered = "FHIR_DELIVERY_POSTPARTUM"
+        transition_result = _run_transition("FHIR_DELIVERY_POSTPARTUM", patient_id=patient_id)
+    elif target_stage == "Preconception" and (is_curr_antenatal or is_curr_postpartum):
+        transition_triggered = "RESET_TO_PRECONCEPTION"
+        reset_obligations(patient_id=patient_id)
+
+    primary_obl_id = str(current[0]["id"]) if current else None
+    notes_suffix = (
+        f" · Notes: {body.additional_info.strip()}" if body.additional_info.strip() else ""
+    )
+    scenario_suffix = (
+        f" · Scenario check: {body.scenario_answer.strip()}" if body.scenario_answer.strip() else ""
+    )
+    append_audit_event(
+        event_type="CLINICAL_SCENARIO_RECONCILED",
+        actor=body.clinician_name.strip(),
+        summary=(
+            f"Reconciled clinical context for {patient_id} ({target_stage}): "
+            f"Stage='{body.pregnancy_stage_answer.strip()}' · "
+            f"Medications='{body.medications_answer.strip()}'"
+            f"{scenario_suffix}{notes_suffix}."
+        ),
+        obligation_id=primary_obl_id,
+    )
+
+    updated_obls = list_obligations(patient_id=patient_id)
+    if transition_result is not None:
+        transition_result = {
+            **transition_result,
+            "obligations": updated_obls,
+            "audit_events": _filter_audit_events(updated_obls, patient_id),
+            "patients": list_patient_summaries(),
+            "cohort_totals": query_patients(limit=1)["cohort_totals"],
+        }
+
+    return {
+        "patient_id": patient_id,
+        "target_life_stage": target_stage,
+        "transition_triggered": transition_triggered,
+        "transition_result": transition_result,
+        "reconciliation": {
+            "patient_id": patient_id,
+            "reconciled_stage": target_stage,
+            "pregnancy_stage_answer": body.pregnancy_stage_answer.strip(),
+            "medications_answer": body.medications_answer.strip(),
+            "scenario_answer": body.scenario_answer.strip(),
+            "additional_info": body.additional_info.strip(),
+            "clinician_name": body.clinician_name.strip(),
+            "reconciled_at": updated_obls[0].get("updated_at", "") if updated_obls else "",
+            "transition_triggered": transition_triggered,
+        },
+        "obligations": updated_obls,
+        "audit_events": _filter_audit_events(updated_obls, patient_id),
+        "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
+    }

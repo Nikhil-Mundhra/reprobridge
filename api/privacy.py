@@ -38,7 +38,7 @@ _CLINICAL_CATEGORIES: dict[str, str] = {
     "RB-THYROID-v1.4.0": "subclinical_hypothyroidism_tsh_followup",
     "RB-IMMUNE-v1.2.1": "live_vaccine_non_immune_deferral",
     "RB-METABOLIC-v1.2.0": "gestational_dysglycemia_ogtt_followup",
-    "RB-PREECLAMPSIA-v1.3.0": "preeclampsia_aspirin_prophylaxis_window",
+    "RB-PREECLAMPSIA-v1.3.0": "preeclampsia_prophylaxis_window",
     "RB-HPV-v1.1.0": "hpv_series_postpartum_completion",
 }
 
@@ -64,6 +64,35 @@ def scrub_text_phi(text: str, extra_forbidden: list[str] | None = None) -> str:
             if token and len(token) >= 3:
                 scrubbed = re.sub(re.escape(token), "[REDACTED_PHI]", scrubbed, flags=re.IGNORECASE)
     return scrubbed
+
+
+# Medication names and dosing that appear in deterministic, clinician-facing rule text.
+# They are stripped before external AI egress so the assistive LLM is never primed with
+# drug/dose directives it is forbidden to repeat (it must not prescribe or dose).
+_MEDICATION_NAME_RE = re.compile(
+    r"\b(?:low[- ]dose\s+)?(?:levothyroxine|aspirin|metformin|insulin|labetalol|nifedipine)\b",
+    flags=re.IGNORECASE,
+)
+# Doses like "150 mg", "50 mcg nightly", "(150 mg nightly)". Lab units such as mg/dL or
+# mIU/L are preserved via the negative lookahead on "/" and the explicit unit list.
+_MEDICATION_DOSE_RE = re.compile(
+    r"\s*\(?\b\d+(?:\.\d+)?\s*(?:mg|mcg|µg)\b(?!\s*/)"
+    r"(?:\s+(?:nightly|daily|once daily|twice daily|bid|od))?\)?",
+    flags=re.IGNORECASE,
+)
+MEDICATION_PLACEHOLDER = "specialist-directed therapy"
+
+
+def redact_medication_directives(text: str) -> str:
+    """Replace drug names and doses with a neutral placeholder for AI-bound free text."""
+    redacted = _MEDICATION_DOSE_RE.sub("", text)
+    redacted = _MEDICATION_NAME_RE.sub(MEDICATION_PLACEHOLDER, redacted)
+    return re.sub(r"[ \t]{2,}", " ", redacted).strip()
+
+
+def _ai_safe_free_text(text: str, forbidden_tokens: list[str]) -> str:
+    """PHI-scrub then medication-redact a free-text field destined for external AI."""
+    return redact_medication_directives(scrub_text_phi(text, forbidden_tokens))
 
 
 def deidentify_obligation(obligation: dict[str, Any]) -> dict[str, Any]:
@@ -159,8 +188,8 @@ def build_obligation_explain_payload(obligation: dict[str, Any]) -> dict[str, An
     deid = deidentify_obligation(obligation)
     explained_obl = {
         **deid,
-        "finding_title": scrub_text_phi(str(obligation.get("title", "")), forbidden_tokens),
-        "clinical_rationale": scrub_text_phi(
+        "finding_title": _ai_safe_free_text(str(obligation.get("title", "")), forbidden_tokens),
+        "clinical_rationale": _ai_safe_free_text(
             str(obligation.get("rationale", "")), forbidden_tokens
         ),
     }
@@ -197,6 +226,56 @@ def scrub_explanation_for_tts(text: str, obligation: dict[str, Any]) -> str:
     scrubbed = scrub_text_phi(text, forbidden_tokens).strip()
     assert_phi_free({"text": scrubbed}, forbidden_tokens=forbidden_tokens)
     return scrubbed
+
+
+def build_reconciliation_questionnaire_payload(
+    obligations: list[dict[str, Any]],
+    patient_id: str,
+) -> dict[str, Any]:
+    """Construct a zero-PHI patient payload for AI scenario reconciliation questions."""
+    raw_tokens: list[str] = [patient_id] if patient_id else []
+    for obl in obligations:
+        raw_tokens.extend(_extract_forbidden_tokens(obl))
+    forbidden_tokens = list(dict.fromkeys(t for t in raw_tokens if t))
+
+    deidentified_items: list[dict[str, Any]] = []
+    for obl in obligations:
+        deid = deidentify_obligation(obl)
+        deidentified_items.append(
+            {
+                **deid,
+                "finding_title": _ai_safe_free_text(str(obl.get("title", "")), forbidden_tokens),
+                "clinical_rationale": _ai_safe_free_text(
+                    str(obl.get("rationale", "")), forbidden_tokens
+                ),
+            }
+        )
+
+    case_token = pseudonymize_patient_id(patient_id or "UNKNOWN")
+    payload = {
+        "residency_policy": "UAE_PHI_LOCAL_ONLY",
+        "case_token": case_token,
+        "obligations": deidentified_items,
+    }
+    assert_phi_free(payload, forbidden_tokens=forbidden_tokens)
+
+    return {
+        "payload": payload,
+        "redacted_fields": sorted(PHI_FIELDS),
+        "permitted_fields": [
+            "case_token",
+            "obligation_id",
+            "life_stage",
+            "clinical_category",
+            "rule_version",
+            "priority",
+            "status",
+            "owner_specialty",
+            "finding_title",
+            "clinical_rationale",
+        ],
+        "phi_check_passed": True,
+    }
 
 
 def assert_phi_free(payload: Any, forbidden_tokens: list[str] | None = None) -> None:

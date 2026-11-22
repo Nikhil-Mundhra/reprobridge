@@ -87,6 +87,10 @@ export interface HealthResponse {
 
 export interface PrototypeDemoProps {
   onBackToTutorial: () => void;
+  initialPatientId?: string;
+  initialReconciliation?: ReconciledClinicalContext | null;
+  initialTransitionResult?: ReconciliationTransitionSeed | null;
+  onOpenPatientSearch?: () => void;
 }
 
 export interface FacilityStage {
@@ -134,4 +138,53 @@ export interface ObligationExplanationResponse {
   ai_metadata: AiMetadata;
   privacy_report: PrivacyReport;
   audit_events?: AuditEvent[];
+}
+
+export interface ReconciliationQuestion {
+  id: string;
+  category: string;
+  question: string;
+  data_shows: string;
+  options: string[];
+  placeholder: string;
+}
+
+export interface ReconciliationQuestionnaireResponse {
+  patient_id: string;
+  context_note: string;
+  questions: ReconciliationQuestion[];
+  disclaimer: string;
+  ai_metadata: AiMetadata;
+  privacy_report: PrivacyReport;
+}
+
+export interface ReconciledClinicalContext {
+  patient_id: string;
+  reconciled_stage: string;
+  pregnancy_stage_answer: string;
+  medications_answer: string;
+  scenario_answer: string;
+  additional_info: string;
+  clinician_name: string;
+  reconciled_at: string;
+  transition_triggered: string | null;
+}
+
+export interface ReconciliationTransitionSeed {
+  event_type: string;
+  agent_summary: string;
+  specialist_handoff: string;
+  ai_metadata: AiMetadata;
+  privacy_report: PrivacyReport;
+  trace: TraceStep[];
+  obligations: Obligation[];
+  audit_events: AuditEvent[];
+  patients?: PatientCohortSummary[];
+  cohort_totals?: CohortTotals;
+}
+
+export interface ReconciliationOnboardingResult {
+  patientId: string;
+  reconciliation: ReconciledClinicalContext;
+  transitionResult?: ReconciliationTransitionSeed | null;
 }

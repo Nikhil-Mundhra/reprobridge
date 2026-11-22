@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import App from "../App";
 import ClinicalDocumentsDrawer from "../ClinicalDocumentsDrawer";
 import ClinicalMetricVisualizer, { extractClinicalMetrics } from "../demo/ClinicalMetricVisualizer";
 import FloatingDocsTab from "../demo/FloatingDocsTab";
@@ -18,6 +19,7 @@ import PrototypeDemo, {
   parseDelimitedTable,
   parseHandoffItems,
   parseStreamedExplanation,
+  parseStreamedQuestionnaire,
   parseStreamedSections,
   type Obligation,
 } from "../PrototypeDemo";
@@ -1418,5 +1420,319 @@ describe("<IntegrationsDrawer /> & <FloatingIntegrationsTab /> HIE/EMR Integrati
     expect(within(dialog).getByText(/5 Connected/)).toBeInTheDocument();
 
     vi.restoreAllMocks();
+  });
+});
+
+describe("<PatientSearchOnboarding /> & Tutorial -> Search -> AI Reconciliation flow", () => {
+  afterEach(() => {
+    window.location.hash = "";
+    vi.restoreAllMocks();
+  });
+
+  it("parses streamed questionnaire markers incrementally via parseStreamedQuestionnaire", () => {
+    const raw = [
+      "CONTEXT_NOTE:",
+      "Confirm 5th vs 8th week gestation and thyroid regimen.",
+      "Q1_QUESTION:",
+      "What pregnancy stage are we at today?",
+      "Q1_OPTIONS:",
+      "8th week gestation | 5th week gestation | Still Preconception",
+      "Q2_QUESTION:",
+      "What medications are we on?",
+      "Q2_OPTIONS:",
+      "Folic Acid 400 mcg | Levothyroxine 25 mcg externally",
+      "Q3_QUESTION:",
+      "Were outside repeat TSH labs drawn?",
+      "Q3_OPTIONS:",
+      "No outside labs yet | Repeat TSH pending upload",
+    ].join("\n");
+
+    const parsed = parseStreamedQuestionnaire(raw);
+    expect(parsed.context_note).toBe("Confirm 5th vs 8th week gestation and thyroid regimen.");
+    expect(parsed.questions).toHaveLength(3);
+    expect(parsed.questions[0].question).toBe("What pregnancy stage are we at today?");
+    expect(parsed.questions[0].options).toEqual([
+      "8th week gestation",
+      "5th week gestation",
+      "Still Preconception",
+    ]);
+    expect(parsed.questions[2].options).toEqual([
+      "No outside labs yet",
+      "Repeat TSH pending upload",
+    ]);
+  });
+
+  it("routes Tutorial -> Search page -> AI-streamed reconciliation questionnaire -> auto-updated full view", async () => {
+    const user = userEvent.setup();
+    window.location.hash = "";
+    vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+
+    let currentObs = makeSeedObligations();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const pathname = new URL(url, "http://localhost").pathname;
+      const method = (init?.method ?? "GET").toUpperCase();
+
+      if (pathname === "/api/health") {
+        return createJsonResponse({
+          status: "ok",
+          residency_policy: "UAE_PHI_LOCAL_ONLY",
+          ai_provider: { provider: "openrouter", configured: true, model: "google/gemma-4-31b-it:free" },
+          database: { provider: "neon-postgres", connected: true, branch: "main", pooled: true, detail: "Connected" },
+        });
+      }
+
+      if (pathname === "/api/patients" && method === "GET") {
+        return createJsonResponse({
+          patients: [
+            {
+              patient_id: "PAT-AE-4092",
+              patient_name: "Amina Al-Mansoori (Synthetic)",
+              age_sex: "32Y · F",
+              clinical_track: "Endocrine & Rubella Continuity",
+              facility_a: "Mubadala Primary Care",
+              facility_b: "Corniche OB-GYN",
+              life_stage: currentObs[0].life_stage,
+              total_obligations: 2,
+              open_count: 2,
+              urgent_count: 0,
+              deferred_count: 0,
+              closed_count: 0,
+            },
+            {
+              patient_id: "PAT-AE-5180",
+              patient_name: "Fatima Al-Zaabi (Synthetic)",
+              age_sex: "29Y · F",
+              clinical_track: "Metabolic & Varicella Continuity",
+              facility_a: "Al Bateen Primary Clinic",
+              facility_b: "Corniche OB-GYN",
+              life_stage: "Preconception",
+              total_obligations: 2,
+              open_count: 2,
+              urgent_count: 0,
+              deferred_count: 0,
+              closed_count: 0,
+            },
+          ],
+          cohort_totals: {
+            total_patients: 2,
+            total_open: 4,
+            total_urgent: 0,
+            total_deferred: 0,
+            total_closed: 0,
+          },
+        });
+      }
+
+      if (pathname === "/api/obligations" && method === "GET") {
+        return createJsonResponse({
+          patient_id: "PAT-AE-4092",
+          obligations: currentObs,
+          audit_events: [],
+        });
+      }
+
+      if (
+        pathname === "/api/patients/PAT-AE-4092/reconcile-questions/stream" &&
+        method === "POST"
+      ) {
+        return createSseResponse([
+          {
+            event: "firewall_verified",
+            data: {
+              patient_id: "PAT-AE-4092",
+              privacy_report: {
+                payload: { residency_policy: "UAE_PHI_LOCAL_ONLY", case_token: "ANON-CASE-A1B2C3D4" },
+                redacted_fields: ["patient_id", "patient_name"],
+                permitted_fields: ["case_token", "finding_title"],
+                phi_check_passed: true,
+              },
+            },
+          },
+          {
+            event: "token",
+            data: { delta: "CONTEXT_NOTE:\nVerify 5th vs 8th week gestation.\n", model: "google/gemma-4-31b-it:free" },
+          },
+          {
+            event: "complete",
+            data: {
+              patient_id: "PAT-AE-4092",
+              context_note:
+                "Cross-check gestational week (5th-week referral vs 8th-week scan) and active thyroid regimen.",
+              questions: [
+                {
+                  id: "pregnancy_stage",
+                  category: "Pregnancy Stage & Dating",
+                  question:
+                    "What pregnancy stage are we at today? HIE shows 5th week, which may actually be 8th week on ultrasound.",
+                  data_shows: "HIE Record: Preconception · 5th-week referral flag",
+                  options: [
+                    "8th week gestation (Antenatal Trimester 1 confirmed by scan)",
+                    "5th week gestation (Matches referral note)",
+                    "Still Preconception (Not currently pregnant)",
+                  ],
+                  placeholder: "Enter gestational week...",
+                },
+                {
+                  id: "medications",
+                  category: "Medication Reconciliation",
+                  question:
+                    "What medications are we on? Is it different from what current HIE data shows?",
+                  data_shows: "HIE List: Folic Acid 400 mcg daily",
+                  options: [
+                    "Matches HIE data (Folic Acid 400 mcg only)",
+                    "Started levothyroxine 25 mcg externally",
+                  ],
+                  placeholder: "Enter medications...",
+                },
+                {
+                  id: "scenario_specific",
+                  category: "Thyroid & Rubella Scenario Check",
+                  question: "Were outside TSH labs drawn or an MMR shot documented?",
+                  data_shows: "Documents: TSH 4.8 mIU/L & Rubella Non-Immune",
+                  options: ["No outside labs yet — keep both open"],
+                  placeholder: "Note external records...",
+                },
+              ],
+              disclaimer: "Assistive reconciliation only.",
+              ai_metadata: {
+                mode: "openrouter",
+                provider: "openrouter",
+                model: "google/gemma-4-31b-it:free",
+                fallback_reason: null,
+              },
+              privacy_report: {
+                payload: { residency_policy: "UAE_PHI_LOCAL_ONLY" },
+                redacted_fields: ["patient_id", "patient_name"],
+                permitted_fields: ["case_token"],
+                phi_check_passed: true,
+              },
+            },
+          },
+        ]);
+      }
+
+      if (pathname === "/api/patients/PAT-AE-4092/reconcile-submit" && method === "POST") {
+        currentObs = makePregnancyObligations();
+        return createJsonResponse({
+          patient_id: "PAT-AE-4092",
+          target_life_stage: "Antenatal (Trimester 1)",
+          transition_triggered: "FHIR_PREGNANCY_CONFIRMED",
+          transition_result: {
+            event_type: "FHIR_PREGNANCY_CONFIRMED",
+            agent_summary: "Pregnancy transition escalated TSH follow-up and deferred live MMR.",
+            specialist_handoff: "• Review OBL-101 urgent TSH follow-up.",
+            ai_metadata: {
+              mode: "openrouter",
+              provider: "openrouter",
+              model: "google/gemma-4-31b-it:free",
+              fallback_reason: null,
+            },
+            privacy_report: {
+              payload: { residency_policy: "UAE_PHI_LOCAL_ONLY", case_token: "ANON-CASE-1234" },
+              redacted_fields: ["patient_id", "patient_name"],
+              permitted_fields: ["case_token"],
+              phi_check_passed: true,
+            },
+            trace: [
+              {
+                node: "detect_open_obligations",
+                execution: "deterministic",
+                phi_exposed: false,
+                detail: "Identified 2 open obligations.",
+              },
+            ],
+            obligations: currentObs,
+            audit_events: [
+              {
+                id: 50,
+                obligation_id: "OBL-101",
+                event_type: "CLINICAL_SCENARIO_RECONCILED",
+                actor: "Dr. Layla Al-Hashimi (OB-GYN)",
+                summary:
+                  "Reconciled clinical context for PAT-AE-4092 (Antenatal Trimester 1): 8th week gestation, levothyroxine 25 mcg.",
+                created_at: "2026-11-22T14:30:00Z",
+              },
+            ],
+          },
+          reconciliation: {
+            patient_id: "PAT-AE-4092",
+            reconciled_stage: "Antenatal (Trimester 1)",
+            pregnancy_stage_answer: "8th week gestation (Antenatal Trimester 1 confirmed by scan)",
+            medications_answer: "Started levothyroxine 25 mcg externally",
+            scenario_answer: "No outside labs yet — keep both open",
+            additional_info: "Ultrasound CRL confirmed 8w2d.",
+            clinician_name: "Dr. Layla Al-Hashimi (OB-GYN)",
+            reconciled_at: "2026-11-22T14:30:00Z",
+            transition_triggered: "FHIR_PREGNANCY_CONFIRMED",
+          },
+          obligations: currentObs,
+          audit_events: [],
+        });
+      }
+
+      return createJsonResponse({ detail: `Unhandled mock route: ${method} ${url}` }, 404);
+    });
+
+    render(<App />);
+
+    // 1. Start on TutorialHome and click Launch Live Prototype -> opens Patient Search Page
+    await user.click(screen.getAllByRole("button", { name: /Launch Live Prototype/i })[0]);
+    expect(
+      await screen.findByRole("heading", { name: /Search & Select Patient Record/i })
+    ).toBeInTheDocument();
+    expect(window.location.hash).toBe("#search");
+
+    // 2. Search narrows cohort to Amina, then click Select Patient & Reconcile
+    const searchInput = screen.getByRole("searchbox", {
+      name: /Search patients by name, MRN, track, or facility/i,
+    });
+    await user.type(searchInput, "Amina");
+    expect(screen.queryByText(/Fatima Al-Zaabi \(Synthetic\)/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Select Patient & Reconcile/i }));
+
+    // 3. AI-streamed questionnaire loads with zero-PHI verification & scenario questions
+    expect(
+      await screen.findByText(/What pregnancy stage are we at today\?/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/UAE Firewall Verified · 0 PHI Sent to AI/i)).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /8th week gestation \(Antenatal Trimester 1 confirmed by scan\)/i,
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Started levothyroxine 25 mcg externally/i })
+    );
+    await user.click(
+      screen.getByRole("button", { name: /No outside labs yet — keep both open/i })
+    );
+    await user.type(
+      screen.getByLabelText(/Any additional information/i),
+      "Ultrasound CRL confirmed 8w2d."
+    );
+
+    // Deterministic preview banner confirms Antenatal rule auto-trigger
+    expect(screen.getByText(/Deterministic Rule Engine Preview:/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Confirm & Open Full Patient View/i }));
+
+    // 4. Full workbench opens at #demo with Reconciled Context banner & escalated Antenatal obligations
+    const main = await screen.findByRole("main");
+    expect(window.location.hash).toBe("#demo");
+    expect(
+      await within(main).findByText(/Clinician-Reconciled Scenario & Document Context/i)
+    ).toBeInTheDocument();
+    expect(within(main).getByText(/Ultrasound CRL confirmed 8w2d\./i)).toBeInTheDocument();
+    expect(within(main).getByText("ESCALATED_FOR_REVIEW")).toBeInTheDocument();
+    expect(within(main).getByText("DEFERRED_TO_POSTPARTUM")).toBeInTheDocument();
+
+    // Returning via Change Patient / Reconcile opens Search Page again
+    await user.click(within(main).getByRole("button", { name: /Change Patient \/ Reconcile/i }));
+    expect(
+      await screen.findByRole("heading", { name: /Search & Select Patient Record/i })
+    ).toBeInTheDocument();
   });
 });

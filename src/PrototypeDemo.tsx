@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, Search } from "lucide-react";
 import ClinicalDocumentsDrawer from "./ClinicalDocumentsDrawer";
 import AuditGovernanceSection from "./demo/AuditGovernanceSection";
 import CareFlowAndPatientHeader, { CareSiteContinuitySpine } from "./demo/CareFlowAndPatientHeader";
@@ -25,6 +26,7 @@ import type {
   PatientCohortSummary,
   PrivacyReport,
   PrototypeDemoProps,
+  ReconciledClinicalContext,
   SafetyBlockInfo,
   TraceStep,
 } from "./demo/types";
@@ -39,6 +41,7 @@ export {
   parseDelimitedTable,
   parseHandoffItems,
   parseStreamedExplanation,
+  parseStreamedQuestionnaire,
   parseStreamedSections,
 } from "./demo/helpers";
 
@@ -51,14 +54,32 @@ const SEEDED_OBLIGATION_IDS = new Set([
   "OBL-302",
 ]);
 
-export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) {
-  const [selectedPatientId, setSelectedPatientId] = useState("PAT-AE-4092");
-  const [patients, setPatients] = useState<PatientCohortSummary[]>(DEFAULT_PATIENT_COHORT);
-  const [cohortTotals, setCohortTotals] = useState<CohortTotals | undefined>(undefined);
-  const [obligations, setObligations] = useState<Obligation[]>([]);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+export default function PrototypeDemo({
+  onBackToTutorial,
+  initialPatientId = "PAT-AE-4092",
+  initialReconciliation = null,
+  initialTransitionResult = null,
+  onOpenPatientSearch,
+}: PrototypeDemoProps) {
+  const [selectedPatientId, setSelectedPatientId] = useState(initialPatientId);
+  const [reconciledContext, setReconciledContext] =
+    useState<ReconciledClinicalContext | null>(initialReconciliation);
+  const [patients, setPatients] = useState<PatientCohortSummary[]>(
+    () => initialTransitionResult?.patients ?? DEFAULT_PATIENT_COHORT
+  );
+  const [cohortTotals, setCohortTotals] = useState<CohortTotals | undefined>(
+    () => initialTransitionResult?.cohort_totals
+  );
+  const [obligations, setObligations] = useState<Obligation[]>(
+    () => initialTransitionResult?.obligations ?? []
+  );
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(
+    () => initialTransitionResult?.audit_events ?? []
+  );
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(
+    () => !(initialTransitionResult && initialTransitionResult.obligations.length > 0)
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,14 +90,25 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [streamTokenCount, setStreamTokenCount] = useState(0);
   const [streamDurationMs, setStreamDurationMs] = useState<number | null>(null);
   const [activeTransitionKind, setActiveTransitionKind] = useState<"pregnancy" | "postpartum">(
-    "pregnancy"
+    () =>
+      initialTransitionResult?.event_type === "FHIR_DELIVERY_POSTPARTUM"
+        ? "postpartum"
+        : "pregnancy"
   );
 
-  const [agentSummary, setAgentSummary] = useState<string | null>(null);
-  const [specialistHandoff, setSpecialistHandoff] = useState<string | null>(null);
-  const [aiMetadata, setAiMetadata] = useState<AiMetadata | null>(null);
-  const [privacyReport, setPrivacyReport] = useState<PrivacyReport | null>(null);
-  const [trace, setTrace] = useState<TraceStep[]>([]);
+  const [agentSummary, setAgentSummary] = useState<string | null>(
+    () => initialTransitionResult?.agent_summary ?? null
+  );
+  const [specialistHandoff, setSpecialistHandoff] = useState<string | null>(
+    () => initialTransitionResult?.specialist_handoff ?? null
+  );
+  const [aiMetadata, setAiMetadata] = useState<AiMetadata | null>(
+    () => initialTransitionResult?.ai_metadata ?? null
+  );
+  const [privacyReport, setPrivacyReport] = useState<PrivacyReport | null>(
+    () => initialTransitionResult?.privacy_report ?? null
+  );
+  const [trace, setTrace] = useState<TraceStep[]>(() => initialTransitionResult?.trace ?? []);
 
   const [verifyTarget, setVerifyTarget] = useState<Obligation | null>(null);
   const [clinicianName, setClinicianName] = useState("Dr. Layla Al-Hashimi (OB-GYN)");
@@ -150,13 +182,14 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   }
 
   useEffect(() => {
-    void loadData("PAT-AE-4092");
+    void loadData(initialPatientId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function handleSelectPatient(patientId: string) {
     if (patientId === selectedPatientId) return;
     setSelectedPatientId(patientId);
+    setReconciledContext(null);
     setAgentSummary(null);
     setSpecialistHandoff(null);
     setAiMetadata(null);
@@ -457,6 +490,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
 
   async function handleReset() {
     setLoading(true);
+    setReconciledContext(null);
     setAgentSummary(null);
     setSpecialistHandoff(null);
     setAiMetadata(null);
@@ -547,6 +581,7 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         selectedPatientId={selectedPatientId}
         loading={loading || isStreaming}
         onSelectPatient={handleSelectPatient}
+        onOpenPatientSearch={onOpenPatientSearch}
       />
 
       <main className="mx-auto max-w-5xl space-y-6 px-6 py-8">
@@ -554,6 +589,55 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
             {error}
           </div>
+        )}
+
+        {reconciledContext && (
+          <section
+            aria-label="Clinician-Reconciled Clinical Context"
+            className="rounded-xl border border-teal-200 bg-teal-50/70 px-5 py-3.5 text-xs text-teal-950 shadow-2xs"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-semibold text-teal-900">
+                <CheckCircle2 className="h-4 w-4 text-teal-600" aria-hidden="true" />
+                <span>Clinician-Reconciled Scenario &amp; Document Context</span>
+                <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-800 ring-1 ring-teal-200">
+                  {reconciledContext.reconciled_stage}
+                </span>
+              </div>
+              {onOpenPatientSearch && (
+                <button
+                  type="button"
+                  onClick={onOpenPatientSearch}
+                  className="inline-flex items-center gap-1 rounded-md border border-teal-300 bg-white px-2.5 py-1 text-[11px] font-medium text-teal-800 hover:bg-teal-100/60"
+                >
+                  <Search className="h-3 w-3" aria-hidden="true" />
+                  Change Patient / Reconcile
+                </button>
+              )}
+            </div>
+            <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+              <p>
+                <strong className="font-semibold">Stage Confirmed:</strong>{" "}
+                {reconciledContext.pregnancy_stage_answer}
+              </p>
+              <p>
+                <strong className="font-semibold">Medications:</strong>{" "}
+                {reconciledContext.medications_answer}
+              </p>
+              {reconciledContext.scenario_answer && (
+                <p>
+                  <strong className="font-semibold">Scenario Check:</strong>{" "}
+                  {reconciledContext.scenario_answer}
+                </p>
+              )}
+              {reconciledContext.additional_info && (
+                <p>
+                  <strong className="font-semibold">Additional Notes:</strong>{" "}
+                  {reconciledContext.additional_info}
+                </p>
+              )}
+            </div>
+          </section>
         )}
 
         <CareFlowAndPatientHeader

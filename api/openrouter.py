@@ -8,6 +8,7 @@ never depend on this module.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator
@@ -20,6 +21,22 @@ from api.privacy import assert_phi_free
 
 load_dotenv(".env")
 load_dotenv(".env.local")
+
+logger = logging.getLogger(__name__)
+
+# Failures that should degrade to the deterministic fallback rather than surface to callers:
+# - httpx.HTTPError: timeouts, connection errors, non-2xx (raise_for_status)
+# - ValueError: malformed JSON bodies (json.JSONDecodeError subclasses ValueError)
+# - KeyError / IndexError / TypeError / AttributeError: unexpected response shapes
+# PrivacyViolationError is deliberately NOT included: it is raised before egress and must propagate.
+_RECOVERABLE_OPENROUTER_ERRORS: tuple[type[Exception], ...] = (
+    httpx.HTTPError,
+    ValueError,
+    KeyError,
+    IndexError,
+    TypeError,
+    AttributeError,
+)
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
@@ -92,6 +109,42 @@ EXPLAIN_STREAM_SYSTEM_PROMPT = (
 _EXPLAIN_DISCLAIMER = (
     "Assistive de-identified explanation only — does not diagnose or prescribe. "
     "Final verification requires clinician approval."
+)
+
+QUESTIONNAIRE_SYSTEM_PROMPT = (
+    "You are ReproBridge's assistive clinical intake & document reconciliation copilot. "
+    "You receive ONLY de-identified obligation metadata (never PHI). "
+    f"{_CLINICAL_SAFETY_RULES} "
+    "Return valid JSON with two keys: "
+    "'context_note' (1 concise sentence flagging any potential mismatch between HIE documents and live patient state) "
+    "and 'questions' (an array of exactly 3 objects, each with string keys 'question' and string-array 'options' of 3 choices): "
+    "item 1 verifies current pregnancy stage vs HIE data (e.g. data shows 5th week/preconception vs possible 8th week scan); "
+    "item 2 verifies current medications and whether they differ from current EMR data; "
+    "item 3 asks a scenario-specific document/lab verification question grounded ONLY in the obligations provided."
+)
+
+QUESTIONNAIRE_STREAM_SYSTEM_PROMPT = (
+    "You are ReproBridge's assistive clinical intake & document reconciliation copilot. "
+    "You receive ONLY de-identified obligation metadata (never PHI). "
+    f"{_CLINICAL_SAFETY_RULES} "
+    "Ask 3 concise verification questions so the clinician confirms whether today's presentation matches the HIE documents on file "
+    "(gestational week discrepancy such as 5th week on record vs 8th week on scan, medication differences, and scenario-specific findings). "
+    "Respond using EXACTLY these markers on their own lines so they can be streamed live:\n"
+    "CONTEXT_NOTE:\n"
+    "<1 concise sentence explaining the document-vs-live verification focus>\n"
+    "Q1_QUESTION:\n"
+    "<question verifying current pregnancy stage vs HIE record>\n"
+    "Q1_OPTIONS:\n"
+    "<option 1> | <option 2> | <option 3>\n"
+    "Q2_QUESTION:\n"
+    "<question verifying active medications vs HIE record>\n"
+    "Q2_OPTIONS:\n"
+    "<option 1> | <option 2> | <option 3>\n"
+    "Q3_QUESTION:\n"
+    "<scenario-specific verification question referencing only obligations in the payload>\n"
+    "Q3_OPTIONS:\n"
+    "<option 1> | <option 2> | <option 3>\n"
+    "Do not output JSON, markdown fences, bold asterisks, or PHI."
 )
 
 
@@ -171,16 +224,39 @@ def _build_headers(api_key: str) -> dict[str, str]:
     }
 
 
+_BRIEF_MARKER_RE = re.compile(
+    r"(?:^|\n)[ \t]*[*#_]*[ \t]*(SUMMARY|HANDOFF)[ \t]*[*_]*[ \t]*:[ \t]*[*_]*",
+    flags=re.IGNORECASE,
+)
+
+
 def _parse_streamed_sections(raw_text: str) -> tuple[str, str]:
-    """Split streamed SUMMARY: / HANDOFF: text into summary and specialist_handoff."""
+    """Split streamed SUMMARY: / HANDOFF: text into summary and specialist_handoff.
+
+    Tolerates case differences and light markdown decoration (e.g. ``**Handoff:**``).
+    Returns an empty handoff string when no HANDOFF marker is present so callers can
+    record that the section was substituted rather than model-generated.
+    """
     text = raw_text.strip()
-    if "HANDOFF:" in text:
-        before, after = text.split("HANDOFF:", 1)
-        summary = before.replace("SUMMARY:", "", 1).strip()
-        handoff = after.strip()
-        return summary, handoff
-    summary = text.replace("SUMMARY:", "", 1).strip()
-    return summary, ""
+    if text.startswith("```"):
+        lines = text.splitlines()[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    markers = list(_BRIEF_MARKER_RE.finditer(text))
+    if not markers:
+        return text, ""
+
+    sections: dict[str, str] = {}
+    preamble = text[: markers[0].start()].strip()
+    for idx, match in enumerate(markers):
+        name = match.group(1).upper()
+        end = markers[idx + 1].start() if idx + 1 < len(markers) else len(text)
+        sections.setdefault(name, text[match.end() : end].strip())
+
+    summary = sections.get("SUMMARY") or preamble
+    return summary, sections.get("HANDOFF", "")
 
 
 def synthesize_deidentified_brief(
@@ -249,7 +325,8 @@ def synthesize_deidentified_brief(
             "summary": summary,
             "specialist_handoff": handoff,
         }
-    except Exception as exc:  # noqa: BLE001
+    except _RECOVERABLE_OPENROUTER_ERRORS as exc:
+        logger.warning(f"OpenRouter call degraded to deterministic fallback: {type(exc).__name__}")
         return _deterministic_fallback(
             deidentified_payload,
             reason=f"OpenRouter unavailable ({type(exc).__name__})",
@@ -338,10 +415,13 @@ def stream_deidentified_brief(
             yield {"type": "done", "result": fb}
             return
 
+        fallback_reason: str | None = None
         if not handoff:
-            handoff = (
-                "• Review escalated clinical obligations and confirm clinician-approved care plan.\n"
-                "• Verify deferred postpartum obligations remain scheduled on the Clinical Obligation Passport."
+            # Model omitted the HANDOFF section: substitute the payload-specific deterministic
+            # checklist and say so, rather than presenting it as model-generated.
+            handoff = _deterministic_fallback(deidentified_payload, reason="")["specialist_handoff"]
+            fallback_reason = (
+                "OpenRouter response missing HANDOFF section; deterministic handoff substituted"
             )
 
         yield {
@@ -350,12 +430,13 @@ def stream_deidentified_brief(
                 "mode": "openrouter",
                 "provider": "openrouter",
                 "model": resolved_model,
-                "fallback_reason": None,
+                "fallback_reason": fallback_reason,
                 "summary": summary,
                 "specialist_handoff": handoff,
             },
         }
-    except Exception as exc:  # noqa: BLE001
+    except _RECOVERABLE_OPENROUTER_ERRORS as exc:
+        logger.warning(f"OpenRouter call degraded to deterministic fallback: {type(exc).__name__}")
         fb = _deterministic_fallback(
             deidentified_payload,
             reason=f"OpenRouter stream unavailable ({type(exc).__name__})",
@@ -415,7 +496,7 @@ def _deterministic_explain_fallback(
                 "Requires formal OGTT confirmation and clinician-approved management review.",
             ],
         ),
-        "preeclampsia_aspirin_prophylaxis_window": (
+        "preeclampsia_prophylaxis_window": (
             f"Preeclampsia Risk & Prophylaxis Timing ({life_stage})",
             (
                 "Elevated baseline blood pressure combined with obstetric history indicates a time-sensitive window "
@@ -541,7 +622,8 @@ def explain_deidentified_obligation(
                 "fallback_reason": None,
             },
         }
-    except Exception as exc:  # noqa: BLE001
+    except _RECOVERABLE_OPENROUTER_ERRORS as exc:
+        logger.warning(f"OpenRouter call degraded to deterministic fallback: {type(exc).__name__}")
         return _deterministic_explain_fallback(
             deidentified_payload,
             reason=f"OpenRouter unavailable ({type(exc).__name__})",
@@ -560,7 +642,9 @@ def _parse_streamed_explanation(raw_text: str) -> tuple[str, str, list[str]]:
         text = "\n".join(lines).strip()
 
     markers = list(
-        re.finditer(r"(?:^|\n)\s*(HEADLINE|EXPLANATION|KEY_POINTS)\s*:\s*", text, flags=re.IGNORECASE)
+        re.finditer(
+            r"(?:^|\n)\s*(HEADLINE|EXPLANATION|KEY_POINTS)\s*:\s*", text, flags=re.IGNORECASE
+        )
     )
     sections: dict[str, str] = {}
     for idx, match in enumerate(markers):
@@ -679,7 +763,8 @@ def stream_deidentified_explanation(
                 },
             },
         }
-    except Exception as exc:  # noqa: BLE001
+    except _RECOVERABLE_OPENROUTER_ERRORS as exc:
+        logger.warning(f"OpenRouter call degraded to deterministic fallback: {type(exc).__name__}")
         fb = _deterministic_explain_fallback(
             deidentified_payload,
             reason=f"OpenRouter stream unavailable ({type(exc).__name__})",
@@ -726,3 +811,462 @@ def synthesize_elevenlabs_audio(
         response = client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         return response.content
+
+
+def _build_base_reconciliation_questions(
+    deidentified_payload: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Build baseline deterministic scenario-specific questions from de-identified obligations."""
+    obls = deidentified_payload.get("obligations") or []
+    categories = {str(o.get("clinical_category", "")) for o in obls}
+    life_stage = str(obls[0].get("life_stage", "Preconception")) if obls else "Preconception"
+    is_postpartum = any(str(o.get("life_stage", "")) == "Postpartum" for o in obls)
+    is_antenatal = not is_postpartum and any(
+        str(o.get("life_stage", "")).startswith("Antenatal") for o in obls
+    )
+
+    if is_postpartum:
+        q1: dict[str, Any] = {
+            "id": "pregnancy_stage",
+            "category": "Pregnancy & Delivery Stage",
+            "question": (
+                "Confirm the patient's current postpartum stage. HIE discharge documents indicate "
+                "recent delivery — does this match today's exam?"
+            ),
+            "data_shows": f"HIE Record: {life_stage} (Post-delivery inpatient summary on file)",
+            "options": [
+                "Postpartum Day 1–3 (Pre-discharge hospital ward)",
+                "Postpartum Week 2–6 (Outpatient follow-up clinic)",
+                "Still Antenatal (discharge record entered in error)",
+            ],
+            "placeholder": "Confirm postpartum day/week or correct gestational stage...",
+        }
+    elif is_antenatal:
+        q1 = {
+            "id": "pregnancy_stage",
+            "category": "Pregnancy Stage & Dating",
+            "question": (
+                "What pregnancy stage are we at today? HIE dating notes show 5th week gestation, "
+                "which may actually be 8th week on ultrasound."
+            ),
+            "data_shows": (
+                f"HIE Record: {life_stage} · Early HIE booking note states ~5th week gestation"
+            ),
+            "options": [
+                "8th week gestation (Antenatal Trimester 1 updated by scan)",
+                "5th week gestation (Matches current HIE record)",
+                "12th+ week gestation (Transitioning toward Trimester 2)",
+                "Delivered — update to Postpartum care",
+            ],
+            "placeholder": "e.g., 8th week gestation by CRL ultrasound (data showed 5th week)...",
+        }
+    else:
+        q1 = {
+            "id": "pregnancy_stage",
+            "category": "Pregnancy Stage & Dating",
+            "question": (
+                "What pregnancy stage are we at today? The HIE baseline shows Preconception "
+                "(with an unconfirmed 5th-week referral note), but today's visit may confirm 8th week gestation."
+            ),
+            "data_shows": (
+                "HIE Record: Preconception baseline · Pending pregnancy confirmation (5th-week referral flag)"
+            ),
+            "options": [
+                "8th week gestation (Confirm pregnancy & activate Antenatal rules)",
+                "5th week gestation (Early pregnancy confirmed today)",
+                "Still Preconception (Not currently pregnant)",
+                "Postpartum / recently delivered",
+            ],
+            "placeholder": "e.g., 8th week gestation confirmed on today's scan...",
+        }
+
+    if "subclinical_hypothyroidism_tsh_followup" in categories:
+        q2: dict[str, Any] = {
+            "id": "medications",
+            "category": "Medication Reconciliation",
+            "question": (
+                "What medications are we on right now? Is any thyroid therapy or prenatal "
+                "supplement different from what the current HIE data shows?"
+            ),
+            "data_shows": "HIE Medication List: Folic Acid 400 mcg daily · No active thyroid replacement listed",
+            "options": [
+                "Matches HIE data (Folic Acid 400 mcg daily only)",
+                "Started low-dose thyroid regimen at an outside clinic",
+                "Prenatal multivitamin + iodine (outside pharmacy fill)",
+            ],
+            "placeholder": "Specify active medications or differences vs HIE record...",
+        }
+        q3: dict[str, Any] = {
+            "id": "scenario_specific",
+            "category": "Thyroid & Rubella Scenario Check",
+            "question": (
+                "HIE shows TSH 4.8 mIU/L (OBL-101) and Rubella IgG non-immune status (OBL-102). "
+                "Were repeat TSH labs drawn or an outside MMR shot documented before today?"
+            ),
+            "data_shows": "Documents: TSH 4.8 mIU/L (Sep) & Rubella IgG Non-Immune serology",
+            "options": [
+                "No external repeat TSH or MMR recorded — both gaps remain open",
+                "Repeat TSH / Free T4 lab drawn externally this week (awaiting upload)",
+                "MMR booster completed prior to conception at outside clinic",
+            ],
+            "placeholder": "Note external TSH values, dates, or immunization cards...",
+        }
+        context_note = (
+            "Cross-check gestational week (5th-week referral vs 8th-week scan) and confirm whether "
+            "outside thyroid labs or medications exist before opening the Antenatal TSH & Rubella obligations."
+        )
+    elif "gestational_dysglycemia_ogtt_followup" in categories:
+        q2 = {
+            "id": "medications",
+            "category": "Medication Reconciliation",
+            "question": (
+                "What medications are we on today? Is her glycemic or prenatal regimen different "
+                "from what the current clinic record shows?"
+            ),
+            "data_shows": "HIE Medication List: Prenatal Folic Acid 400 mcg · No Metformin or insulin on file",
+            "options": [
+                "Matches HIE data (Folic Acid 400 mcg only)",
+                "Started Metformin XR at outside endocrinology clinic",
+                "Diet & lifestyle nutrition plan only",
+            ],
+            "placeholder": "Confirm glycemic or prenatal medications vs HIE list...",
+        }
+        q3 = {
+            "id": "scenario_specific",
+            "category": "Dysglycemia & VZV Scenario Check",
+            "question": (
+                "Current data shows Fasting Glucose 112 mg/dL, HbA1c 6.1%, and Varicella IgG non-immune. "
+                "Has a fasting OGTT or home glucose log or VZV shot occurred outside this facility?"
+            ),
+            "data_shows": "Documents: Fasting Glucose 112 mg/dL · HbA1c 6.1% · VZV IgG < 100 mIU/mL",
+            "options": [
+                "No external OGTT or VZV update — keep both obligations active",
+                "7-day fasting glucometer log brought to visit today",
+                "100g OGTT completed externally (result pending HIE sync)",
+            ],
+            "placeholder": "Note glucometer readings, outside OGTT dates, or VZV history...",
+        }
+        context_note = (
+            "Verify exact gestational week and glycemic medications so early OGTT screening and "
+            "Varicella contraindication rules align with today's presentation."
+        )
+    elif {
+        "preeclampsia_prophylaxis_window",
+        "preeclampsia_aspirin_prophylaxis_window",
+    } & categories:
+        q2 = {
+            "id": "medications",
+            "category": "Medication Reconciliation",
+            "question": (
+                "What medications are we on currently? Are blood pressure agents or low-dose aspirin "
+                "different from what the current HIE medication list shows?"
+            ),
+            "data_shows": "HIE Medication List: Prenatal multivitamin · No antihypertensive or aspirin documented",
+            "options": [
+                "Matches HIE (no aspirin or BP agent started yet)",
+                "Already taking low-dose aspirin daily from outside clinic",
+                "Taking antihypertensive regimen prescribed externally",
+            ],
+            "placeholder": "Confirm aspirin, BP medications, or prenatal vitamins...",
+        }
+        q3 = {
+            "id": "scenario_specific",
+            "category": "BP Prophylaxis Window & HPV Check",
+            "question": (
+                "Documents show baseline BP 134/86 mmHg (12–16w preeclampsia window) and an incomplete HPV series. "
+                "Have home BP readings crossed 140/90 mmHg or was an outside HPV dose given?"
+            ),
+            "data_shows": "Documents: Baseline BP 134/86 mmHg · HPV 9-valent Dose 1 of 3",
+            "options": [
+                "Home BP stable ~130s/80s; no additional HPV dose given",
+                "Home BP spikes >= 140/90 mmHg noted this week",
+                "HPV Dose 2 already administered at another facility",
+            ],
+            "placeholder": "Enter home BP log range or external vaccination dates...",
+        }
+        context_note = (
+            "Confirm gestational week (critical for the 12–16 week preeclampsia window) and home BP readings "
+            "before opening the obligation passport."
+        )
+    else:
+        q2 = {
+            "id": "medications",
+            "category": "Medication Reconciliation",
+            "question": (
+                "What medications are we on today, and is anything different from what the current HIE data shows?"
+            ),
+            "data_shows": "HIE Medication List: Standard prenatal supplement recorded",
+            "options": [
+                "Matches current HIE medication list",
+                "Additional outside prescription started since last visit",
+                "Stopped prior clinic medication",
+            ],
+            "placeholder": "List current medications or discrepancies...",
+        }
+        q3 = {
+            "id": "scenario_specific",
+            "category": "Clinical Document Check",
+            "question": (
+                f"Do the {len(obls)} imported HIE clinical obligations accurately match today's labs and visit context?"
+            ),
+            "data_shows": f"Documents: {len(obls)} open obligation record(s) from UAE HIE",
+            "options": [
+                "Yes — documents match today's scenario",
+                "New external lab result available today",
+            ],
+            "placeholder": "Describe any missing or updated outside records...",
+        }
+        context_note = "Verify gestational stage, active medications, and HIE document alignment before entering the workbench."
+
+    return context_note, [q1, q2, q3]
+
+
+def _deterministic_questionnaire_fallback(
+    deidentified_payload: dict[str, Any],
+    reason: str,
+) -> dict[str, Any]:
+    context_note, questions = _build_base_reconciliation_questions(deidentified_payload)
+    return {
+        "context_note": context_note,
+        "questions": questions,
+        "disclaimer": (
+            "Assistive scenario reconciliation only — confirms clinician context without PHI egress."
+        ),
+        "ai_metadata": {
+            "mode": "deterministic_fallback",
+            "provider": "local-deterministic",
+            "model": "none",
+            "fallback_reason": reason,
+        },
+    }
+
+
+def _parse_streamed_questionnaire(
+    raw_text: str,
+    base_context_note: str,
+    base_questions: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Parse streamed questionnaire markers onto deterministic base metadata."""
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    markers = list(
+        re.finditer(
+            r"(?:^|\n)\s*(CONTEXT_NOTE|Q1_QUESTION|Q1_OPTIONS|Q2_QUESTION|Q2_OPTIONS|Q3_QUESTION|Q3_OPTIONS)\s*:\s*",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    if not markers:
+        return base_context_note, base_questions
+
+    sections: dict[str, str] = {}
+    for idx, match in enumerate(markers):
+        name = match.group(1).upper()
+        start = match.end()
+        end = markers[idx + 1].start() if idx + 1 < len(markers) else len(text)
+        sections[name] = " ".join(text[start:end].splitlines()).strip()
+
+    context_note = sections.get("CONTEXT_NOTE") or base_context_note
+    merged: list[dict[str, Any]] = []
+    for idx, base in enumerate(base_questions[:3], start=1):
+        q_text = sections.get(f"Q{idx}_QUESTION") or base["question"]
+        raw_opts = sections.get(f"Q{idx}_OPTIONS", "")
+        parsed_opts = [opt.strip() for opt in raw_opts.split("|") if opt.strip()]
+        merged.append(
+            {
+                **base,
+                "question": q_text,
+                "options": parsed_opts[:4] if len(parsed_opts) >= 2 else base["options"],
+            }
+        )
+    return context_note, merged
+
+
+def generate_reconciliation_questions(
+    deidentified_payload: dict[str, Any],
+    *,
+    timeout_seconds: float = 18.0,
+) -> dict[str, Any]:
+    """Generate de-identified scenario-specific reconciliation questions via OpenRouter with fallback."""
+    assert_phi_free(deidentified_payload)
+
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    primary_model, fallback_chain = _get_model_config()
+    if not api_key:
+        return _deterministic_questionnaire_fallback(
+            deidentified_payload,
+            reason="OPENROUTER_API_KEY not configured",
+        )
+
+    base_context_note, base_questions = _build_base_reconciliation_questions(deidentified_payload)
+    headers = _build_headers(api_key)
+    request_body = {
+        "model": primary_model,
+        "models": fallback_chain,
+        "temperature": 0.2,
+        "max_tokens": 550,
+        "reasoning": {"effort": "none"},
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": QUESTIONNAIRE_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Generate 3 reconciliation questions for this de-identified case payload (0 PHI):\n"
+                    f"{json.dumps(deidentified_payload, indent=2)}"
+                ),
+            },
+        ],
+    }
+
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(OPENROUTER_API_URL, headers=headers, json=request_body)
+            response.raise_for_status()
+            data = response.json()
+
+        raw_content = str(data["choices"][0]["message"]["content"]).strip()
+        if raw_content.startswith("```"):
+            raw_content = raw_content.strip("`").removeprefix("json").strip()
+        parsed = json.loads(raw_content)
+        context_note = str(parsed.get("context_note") or base_context_note).strip()
+        raw_qs = parsed.get("questions") or []
+        merged: list[dict[str, Any]] = []
+        for idx, base in enumerate(base_questions[:3]):
+            item = raw_qs[idx] if idx < len(raw_qs) and isinstance(raw_qs[idx], dict) else {}
+            q_text = str(item.get("question") or base["question"]).strip()
+            raw_opts = item.get("options") or []
+            opts = [str(o).strip() for o in raw_opts if str(o).strip()][:4]
+            merged.append(
+                {
+                    **base,
+                    "question": q_text,
+                    "options": opts if len(opts) >= 2 else base["options"],
+                }
+            )
+
+        return {
+            "context_note": context_note,
+            "questions": merged,
+            "disclaimer": (
+                "Assistive scenario reconciliation only — confirms clinician context without PHI egress."
+            ),
+            "ai_metadata": {
+                "mode": "openrouter",
+                "provider": "openrouter",
+                "model": str(data.get("model", primary_model)),
+                "fallback_reason": None,
+            },
+        }
+    except _RECOVERABLE_OPENROUTER_ERRORS as exc:
+        logger.warning(f"OpenRouter call degraded to deterministic fallback: {type(exc).__name__}")
+        return _deterministic_questionnaire_fallback(
+            deidentified_payload,
+            reason=f"OpenRouter unavailable ({type(exc).__name__})",
+        )
+
+
+def stream_reconciliation_questions(
+    deidentified_payload: dict[str, Any],
+    *,
+    timeout_seconds: float = 25.0,
+) -> Iterator[dict[str, Any]]:
+    """Stream token deltas from OpenRouter for scenario-specific reconciliation questions."""
+    assert_phi_free(deidentified_payload)
+
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    primary_model, fallback_chain = _get_model_config()
+    base_context_note, base_questions = _build_base_reconciliation_questions(deidentified_payload)
+
+    if not api_key:
+        fb = _deterministic_questionnaire_fallback(
+            deidentified_payload,
+            reason="OPENROUTER_API_KEY not configured",
+        )
+        yield {"type": "done", "result": fb}
+        return
+
+    headers = _build_headers(api_key)
+    request_body = {
+        "model": primary_model,
+        "models": fallback_chain,
+        "temperature": 0.2,
+        "max_tokens": 550,
+        "reasoning": {"effort": "none"},
+        "stream": True,
+        "messages": [
+            {"role": "system", "content": QUESTIONNAIRE_STREAM_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Generate 3 reconciliation questions for this de-identified case payload (0 PHI):\n"
+                    f"{json.dumps(deidentified_payload, indent=2)}"
+                ),
+            },
+        ],
+    }
+
+    accumulated: list[str] = []
+    resolved_model = primary_model
+    try:
+        with (
+            httpx.Client(timeout=timeout_seconds) as client,
+            client.stream(
+                "POST", OPENROUTER_API_URL, headers=headers, json=request_body
+            ) as response,
+        ):
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if chunk.get("model"):
+                    resolved_model = str(chunk["model"])
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0].get("delta") or {}).get("content")
+                if delta:
+                    accumulated.append(delta)
+                    yield {"type": "token", "delta": delta, "model": resolved_model}
+
+        full_text = "".join(accumulated).strip()
+        context_note, questions = _parse_streamed_questionnaire(
+            full_text, base_context_note, base_questions
+        )
+        yield {
+            "type": "done",
+            "result": {
+                "context_note": context_note,
+                "questions": questions,
+                "disclaimer": (
+                    "Assistive scenario reconciliation only — confirms clinician context without PHI egress."
+                ),
+                "ai_metadata": {
+                    "mode": "openrouter",
+                    "provider": "openrouter",
+                    "model": resolved_model,
+                    "fallback_reason": None,
+                },
+            },
+        }
+    except _RECOVERABLE_OPENROUTER_ERRORS as exc:
+        logger.warning(f"OpenRouter call degraded to deterministic fallback: {type(exc).__name__}")
+        fb = _deterministic_questionnaire_fallback(
+            deidentified_payload,
+            reason=f"OpenRouter stream unavailable ({type(exc).__name__})",
+        )
+        yield {"type": "done", "result": fb}

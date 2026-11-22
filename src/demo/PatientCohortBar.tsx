@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, Users } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Search, Users } from "lucide-react";
 import PopulationRegistryModal from "./PopulationRegistryModal";
 import type { CohortTotals, PatientCohortSummary } from "./types";
 
@@ -9,6 +9,7 @@ interface PatientCohortBarProps {
   selectedPatientId: string;
   loading: boolean;
   onSelectPatient: (patientId: string) => void;
+  onOpenPatientSearch?: () => void;
 }
 
 function formatCompactPatientName(name: string): string {
@@ -21,6 +22,7 @@ export default function PatientCohortBar({
   selectedPatientId,
   loading,
   onSelectPatient,
+  onOpenPatientSearch,
 }: PatientCohortBarProps) {
   const [registryOpen, setRegistryOpen] = useState(false);
   const [initialTriage, setInitialTriage] = useState<
@@ -128,6 +130,17 @@ export default function PatientCohortBar({
                 <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
               </span>
             </button>
+            {onOpenPatientSearch && (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={onOpenPatientSearch}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-2xs transition hover:border-teal-400 hover:bg-teal-50/50 disabled:opacity-60"
+              >
+                <Search className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
+                <span className="hidden sm:inline">Search Patients</span>
+              </button>
+            )}
           </div>
 
           {/* Clickable Cohort Counters */}

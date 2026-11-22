@@ -99,3 +99,81 @@ def test_deterministic_clinical_rules_succeed_even_when_openrouter_fails(monkeyp
         "apply_uae_privacy_firewall",
         "synthesize_coordination_brief",
     ]
+
+
+def _fake_stream_factory(text_chunks: list[str]):
+    import contextlib
+
+    @contextlib.contextmanager
+    def fake_stream(self, method, url, *, headers=None, json=None, **kwargs):  # noqa: A002 -- mirrors httpx.Client.stream signature
+        body = "".join(
+            "data: "
+            + __import__("json").dumps(
+                {"model": "google/gemma-4-31b-it:free", "choices": [{"delta": {"content": c}}]}
+            )
+            + "\n\n"
+            for c in text_chunks
+        )
+        body += "data: [DONE]\n\n"
+        yield httpx.Response(
+            status_code=200, request=httpx.Request(method, url), content=body.encode()
+        )
+
+    return fake_stream
+
+
+def test_stream_brief_flags_substituted_handoff_when_marker_missing(monkeypatch):
+    from api.openrouter import stream_deidentified_brief
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key")
+    monkeypatch.setattr(
+        httpx.Client,
+        "stream",
+        _fake_stream_factory(["SUMMARY:\n", "Thyroid follow-up escalated for OB-GYN review."]),
+    )
+    report = build_ai_safe_payload("FHIR_PREGNANCY_CONFIRMED", SEED_OBLIGATIONS[:2], [])
+    events = list(stream_deidentified_brief(report["payload"]))
+    result = events[-1]["result"]
+
+    assert result["mode"] == "openrouter"
+    assert result["summary"] == "Thyroid follow-up escalated for OB-GYN review."
+    assert "HANDOFF" in (result["fallback_reason"] or "")
+    assert "OBL-101" in result["specialist_handoff"]
+
+
+def test_stream_brief_parses_markdown_decorated_markers(monkeypatch):
+    from api.openrouter import stream_deidentified_brief
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key")
+    monkeypatch.setattr(
+        httpx.Client,
+        "stream",
+        _fake_stream_factory(
+            ["**Summary:** Two gaps reassessed.\n", "**Handoff:**\n", "• Review OBL-101."]
+        ),
+    )
+    report = build_ai_safe_payload("FHIR_PREGNANCY_CONFIRMED", SEED_OBLIGATIONS[:2], [])
+    result = list(stream_deidentified_brief(report["payload"]))[-1]["result"]
+
+    assert result["fallback_reason"] is None
+    assert result["summary"] == "Two gaps reassessed."
+    assert result["specialist_handoff"] == "• Review OBL-101."
+
+
+def test_stream_brief_falls_back_on_transport_error(monkeypatch):
+    import contextlib
+
+    from api.openrouter import stream_deidentified_brief
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-key")
+
+    @contextlib.contextmanager
+    def broken_stream(self, method, url, **kwargs):
+        raise httpx.ConnectTimeout("timed out")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(httpx.Client, "stream", broken_stream)
+    report = build_ai_safe_payload("FHIR_PREGNANCY_CONFIRMED", SEED_OBLIGATIONS[:2], [])
+    result = list(stream_deidentified_brief(report["payload"]))[-1]["result"]
+    assert result["mode"] == "deterministic_fallback"
+    assert "ConnectTimeout" in result["fallback_reason"]

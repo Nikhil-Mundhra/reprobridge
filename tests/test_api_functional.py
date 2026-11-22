@@ -296,3 +296,67 @@ def test_multi_patient_cohort_and_transitions(monkeypatch):
     assert "4.8 mIU/L" in captured_tts[0]
 
     client.post("/api/demo/reset")
+
+
+def test_patient_reconciliation_questionnaire_and_submit(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = TestClient(app)
+    client.post("/api/demo/reset")
+
+    q_resp = client.post("/api/patients/PAT-AE-4092/reconcile-questions")
+    assert q_resp.status_code == 200
+    q_data = q_resp.json()
+    assert q_data["patient_id"] == "PAT-AE-4092"
+    assert q_data["privacy_report"]["phi_check_passed"] is True
+    assert "Amina" not in json.dumps(q_data["privacy_report"]["payload"])
+    assert "PAT-AE-4092" not in json.dumps(q_data["privacy_report"]["payload"])
+    assert len(q_data["questions"]) == 3
+    assert q_data["questions"][0]["id"] == "pregnancy_stage"
+    assert "8th week" in q_data["questions"][0]["question"]
+    assert q_data["questions"][1]["id"] == "medications"
+    assert q_data["questions"][2]["id"] == "scenario_specific"
+
+    stream_resp = client.post("/api/patients/PAT-AE-4092/reconcile-questions/stream")
+    assert stream_resp.status_code == 200
+    assert stream_resp.headers["content-type"].startswith("text/event-stream")
+    assert "event: firewall_verified" in stream_resp.text
+    assert "event: complete" in stream_resp.text
+    assert '"phi_check_passed": true' in stream_resp.text
+
+    missing = client.post("/api/patients/PAT-UNKNOWN-999/reconcile-questions")
+    assert missing.status_code == 404
+
+    submit_resp = client.post(
+        "/api/patients/PAT-AE-4092/reconcile-submit",
+        json={
+            "pregnancy_stage_answer": "8th week gestation (scan updated from 5th week record)",
+            "target_life_stage": "Antenatal (Trimester 1)",
+            "medications_answer": "Started levothyroxine 25 mcg externally",
+            "scenario_answer": "No external repeat TSH yet — keep OBL-101 urgent",
+            "additional_info": "Patient brought ultrasound report confirming 8w2d CRL.",
+        },
+    )
+    assert submit_resp.status_code == 200
+    submit_data = submit_resp.json()
+    assert submit_data["target_life_stage"] == "Antenatal (Trimester 1)"
+    assert submit_data["transition_triggered"] == "FHIR_PREGNANCY_CONFIRMED"
+    assert submit_data["transition_result"] is not None
+
+    by_id = {item["id"]: item for item in submit_data["obligations"]}
+    assert by_id["OBL-101"]["status"] == "ESCALATED_FOR_REVIEW"
+    assert by_id["OBL-101"]["priority"] == "URGENT"
+    assert by_id["OBL-102"]["status"] == "DEFERRED_TO_POSTPARTUM"
+
+    event_types = [ev["event_type"] for ev in submit_data["audit_events"]]
+    assert "CLINICAL_SCENARIO_RECONCILED" in event_types
+    reconcile_ev = next(
+        ev
+        for ev in submit_data["audit_events"]
+        if ev["event_type"] == "CLINICAL_SCENARIO_RECONCILED"
+    )
+    assert "8th week gestation" in reconcile_ev["summary"]
+    assert "levothyroxine 25 mcg" in reconcile_ev["summary"]
+
+    client.post("/api/demo/reset")

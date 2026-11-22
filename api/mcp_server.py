@@ -172,7 +172,7 @@ def handle_mcp_jsonrpc(request: dict[str, Any]) -> dict[str, Any]:
             "id": req_id,
             "error": {"code": -32602, "message": str(exc)},
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 -- JSON-RPC boundary: any tool failure must become a -32000 error envelope
         return {
             "jsonrpc": "2.0",
             "id": req_id,

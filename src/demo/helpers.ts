@@ -147,6 +147,61 @@ export function parseStreamedExplanation(raw: string): {
   return { headline, explanation, key_points };
 }
 
+export function parseStreamedQuestionnaire(raw: string): {
+  context_note: string;
+  questions: Array<{ question: string; options: string[] }>;
+} {
+  let cleaned = raw.trim();
+  if (!cleaned) {
+    return { context_note: "", questions: [] };
+  }
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+  }
+
+  const markerRe =
+    /(?:^|\n)\s*(CONTEXT_NOTE|Q1_QUESTION|Q1_OPTIONS|Q2_QUESTION|Q2_OPTIONS|Q3_QUESTION|Q3_OPTIONS)\s*:\s*/gi;
+  const matches: Array<{ name: string; start: number; end: number }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = markerRe.exec(cleaned)) !== null) {
+    matches.push({
+      name: match[1].toUpperCase(),
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+  }
+
+  if (matches.length === 0) {
+    return {
+      context_note: cleaned.replace(/^CONTEXT_NOTE:\s*/i, "").trim(),
+      questions: [],
+    };
+  }
+
+  const sections: Record<string, string> = {};
+  for (let i = 0; i < matches.length; i++) {
+    const cur = matches[i];
+    const nextStart = i + 1 < matches.length ? matches[i + 1].start : cleaned.length;
+    sections[cur.name] = cleaned.slice(cur.end, nextStart).replace(/\s*\n+\s*/g, " ").trim();
+  }
+
+  const questions: Array<{ question: string; options: string[] }> = [];
+  for (let idx = 1; idx <= 3; idx++) {
+    const qText = sections[`Q${idx}_QUESTION`] ?? "";
+    const opts = (sections[`Q${idx}_OPTIONS`] ?? "")
+      .split("|")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    questions.push({ question: qText, options: opts });
+  }
+
+  return {
+    context_note: sections.CONTEXT_NOTE ?? "",
+    questions,
+  };
+}
+
 export function parseHandoffItems(text: string): string[] {
   const lines = text
     .split(/\n+/)
