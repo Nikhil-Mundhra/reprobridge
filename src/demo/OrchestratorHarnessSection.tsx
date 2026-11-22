@@ -1,9 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
-  ArrowRight,
   Check,
   Copy,
-  Cpu,
   Eye,
   FileCheck2,
   Info,
@@ -231,14 +229,6 @@ export default function OrchestratorHarnessSection({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {(aiMetadata || streamingModel) && (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-300 bg-white px-2.5 py-1 font-mono text-[11px] font-medium text-teal-800">
-              <Cpu className="h-3 w-3" />
-              {aiMetadata
-                ? `${aiMetadata.provider} · ${aiMetadata.model}`
-                : `openrouter · ${streamingModel}`}
-            </span>
-          )}
           {!isStreaming && agentSummary && (
             <button
               type="button"
@@ -519,9 +509,9 @@ export default function OrchestratorHarnessSection({
         </div>
       ) : null}
 
-      {/* Clickable & Arrow-Key-Navigable Trace Cards 1–4 with inline Step Inspector Drawer */}
+      {/* Compact Single-Row Technical Pipeline Strip (Expand Step Inspector on Click) */}
       {trace.length > 0 && (
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <div
             role="tablist"
             aria-label="Care-resolution workflow trace steps (use Arrow keys to move, Enter to inspect)"
@@ -531,7 +521,7 @@ export default function OrchestratorHarnessSection({
                 if (!Number.isNaN(idxAttr)) setFocusedTraceIndex(idxAttr);
               });
             }}
-            className="rb-trace-grid"
+            className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4"
           >
             {trace.map((step, idx) => {
               const meta = TRACE_NODE_META[step.node] ?? {
@@ -543,113 +533,72 @@ export default function OrchestratorHarnessSection({
               const isSelected = selectedTraceNode === step.node;
 
               return (
-                <article
+                <button
                   key={step.node}
-                  title={step.node}
-                  className={`rb-trace-card rounded-xl border border-t-2 ${meta.accent} bg-white p-3.5 text-xs shadow-xs transition ${
+                  type="button"
+                  role="tab"
+                  id={`trace-tab-${step.node}`}
+                  aria-selected={isSelected}
+                  data-trace-index={idx}
+                  title={step.detail}
+                  tabIndex={
+                    selectedTraceNode
+                      ? isSelected
+                        ? 0
+                        : -1
+                      : idx === focusedTraceIndex
+                        ? 0
+                        : -1
+                  }
+                  onFocus={() => setFocusedTraceIndex(idx)}
+                  onClick={() => {
+                    setFocusedTraceIndex(idx);
+                    setSelectedTraceNode((prev) =>
+                      prev === step.node ? null : step.node
+                    );
+                  }}
+                  className={`flex items-center justify-between gap-2 rounded-lg border border-t-2 ${meta.accent} bg-white px-3 py-2 text-left text-xs shadow-xs transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 ${
                     isSelected
                       ? "border-teal-400 ring-2 ring-teal-500/25"
                       : "border-slate-200/90 hover:border-teal-300"
                   }`}
                 >
-                  <header className="flex min-w-0 items-start justify-between gap-2">
-                    <button
-                      type="button"
-                      role="tab"
-                      id={`trace-tab-${step.node}`}
-                      aria-selected={isSelected}
-                      data-trace-index={idx}
-                      tabIndex={
-                        selectedTraceNode
-                          ? isSelected
-                            ? 0
-                            : -1
-                          : idx === focusedTraceIndex
-                            ? 0
-                            : -1
-                      }
-                      onFocus={() => setFocusedTraceIndex(idx)}
-                      onClick={() => {
-                        setFocusedTraceIndex(idx);
-                        setSelectedTraceNode((prev) =>
-                          prev === step.node ? null : step.node
-                        );
-                      }}
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600"
-                    >
-                      <span
-                        className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-bold ${meta.badge}`}
-                      >
-                        {idx + 1}
-                      </span>
-                      <h4 className="font-semibold leading-snug text-slate-900">
-                        {meta.title}
-                      </h4>
-                    </button>
-                    {idx < 3 && (
-                      <ArrowRight
-                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-400"
-                        aria-hidden="true"
-                      />
-                    )}
-                  </header>
-
-                  <p className="leading-relaxed text-slate-600">{step.detail}</p>
-
-                  <footer className="flex flex-wrap items-center justify-between gap-1.5 border-t border-slate-100 pt-2">
+                  <span className="flex min-w-0 items-center gap-2">
                     <span
-                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${exec.className}`}
+                      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px] font-bold ${meta.badge}`}
                     >
-                      {exec.label}
+                      {idx + 1}
                     </span>
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      onClick={() => {
-                        setFocusedTraceIndex(idx);
-                        setSelectedTraceNode((prev) =>
-                          prev === step.node ? null : step.node
-                        );
-                      }}
-                      className="inline-flex items-center gap-1 text-[10px] font-medium text-teal-700 hover:underline"
-                    >
-                      <Eye className="h-3 w-3 text-teal-600" aria-hidden="true" />
-                      <span>{isSelected ? "Hide" : "Inspect"}</span>
-                    </button>
-                  </footer>
-                </article>
+                    <span className="truncate font-semibold text-slate-900">
+                      {meta.title}
+                    </span>
+                  </span>
+                  <span
+                    className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${exec.className}`}
+                  >
+                    {exec.label}
+                  </span>
+                </button>
               );
             })}
             {isStreaming && trace.length === 3 && (
-              <article
+              <div
                 title="synthesize_coordination_brief"
-                className="rb-trace-card rounded-xl border border-dashed border-purple-300 border-t-2 border-t-purple-500 bg-white/90 p-3.5 text-xs shadow-xs"
+                className="flex items-center justify-between gap-2 rounded-lg border border-dashed border-purple-300 border-t-2 border-t-purple-500 bg-white/90 px-3 py-2 text-xs shadow-xs"
               >
-                <header className="flex min-w-0 items-center gap-2">
-                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 font-mono text-[11px] font-bold text-purple-800">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 font-mono text-[10px] font-bold text-purple-800">
                     4
                   </span>
-                  <h4 className="font-semibold leading-snug text-slate-900">
+                  <span className="truncate font-semibold text-slate-900">
                     Synthesize Handoff Brief
-                  </h4>
-                </header>
-
-                <div className="space-y-1.5">
-                  <div className="rb-shimmer h-2.5 w-full rounded" />
-                  <div className="rb-shimmer h-2.5 w-4/5 rounded" />
-                </div>
-
-                <footer className="flex items-center justify-between border-t border-slate-100 pt-2">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-800">
-                    <progress aria-label="Streaming brief" className="rb-spinner" />
-                    Streaming…
                   </span>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700">
-                    <Lock className="h-2.5 w-2.5" aria-hidden="true" />
-                    0 PHI
-                  </span>
-                </footer>
-              </article>
+                </span>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-1.5 py-0.5 text-[10px] font-semibold text-purple-800">
+                  <progress aria-label="Streaming brief" className="rb-spinner" />
+                  Streaming…
+                </span>
+              </div>
             )}
           </div>
 
@@ -673,6 +622,9 @@ export default function OrchestratorHarnessSection({
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               </div>
+              <p className="mt-2 text-slate-600">
+                {trace.find((s) => s.node === selectedTraceNode)?.detail}
+              </p>
 
               {selectedTraceNode === "detect_open_obligations" && (
                 <div className="mt-3 space-y-2.5">
@@ -764,8 +716,10 @@ export default function OrchestratorHarnessSection({
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                   <p className="font-mono text-[11px] text-slate-600">
                     {aiMetadata
-                      ? `${aiMetadata.provider} · ${aiMetadata.model}`
-                      : "openrouter"}
+                      ? `${aiMetadata.provider} · ${aiMetadata.model.replace(/:free$/i, "")}`
+                      : streamingModel
+                        ? `openrouter · ${streamingModel.replace(/:free$/i, "")}`
+                        : "openrouter"}
                     {streamTokenCount > 0 ? ` · ${streamTokenCount} chunks` : ""}
                     {streamDurationMs !== null ? ` · ${(streamDurationMs / 1000).toFixed(1)}s` : ""}
                   </p>
@@ -789,11 +743,14 @@ export default function OrchestratorHarnessSection({
       )}
 
       {privacyReport && (
-        <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs text-indigo-950">
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 text-xs text-indigo-950">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 font-semibold text-indigo-900">
+            <div className="flex flex-wrap items-center gap-2 font-semibold text-indigo-900">
               <Lock className="h-3.5 w-3.5" />
-              UAE Data Residency Firewall — Zero PHI Sent Outside UAE
+              <span>UAE Data Residency Firewall — Zero PHI Sent Outside UAE</span>
+              <span className="font-mono text-[10px] font-normal text-indigo-700">
+                ({privacyReport.redacted_fields.length} PHI fields stripped)
+              </span>
             </div>
             <button
               type="button"
@@ -805,27 +762,26 @@ export default function OrchestratorHarnessSection({
             </button>
           </div>
 
-          <div className="mt-2 grid gap-3 sm:grid-cols-2">
-            <div>
-              <p className="font-medium text-indigo-800">
-                Kept in Neon Postgres / UAE (Redacted):
-              </p>
-              <p className="mt-0.5 font-mono text-[11px] text-indigo-700">
-                {privacyReport.redacted_fields.join(", ")}
-              </p>
-            </div>
-            <div>
-              <p className="font-medium text-emerald-800">
-                Permitted to OpenRouter (De-identified Only):
-              </p>
-              <p className="mt-0.5 font-mono text-[11px] text-emerald-700">
-                {privacyReport.permitted_fields.join(", ")}
-              </p>
-            </div>
-          </div>
-
           {showPayload && (
-            <div className="mt-3 space-y-2.5">
+            <div className="mt-3 space-y-2.5 border-t border-indigo-200/70 pt-2.5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="font-medium text-indigo-800">
+                    Kept in Neon Postgres / UAE (Redacted):
+                  </p>
+                  <p className="mt-0.5 font-mono text-[11px] text-indigo-700">
+                    {privacyReport.redacted_fields.join(", ")}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium text-emerald-800">
+                    Permitted to OpenRouter (De-identified Only):
+                  </p>
+                  <p className="mt-0.5 font-mono text-[11px] text-emerald-700">
+                    {privacyReport.permitted_fields.join(", ")}
+                  </p>
+                </div>
+              </div>
               <div
                 role="tablist"
                 aria-label="PHI redaction inspection view"

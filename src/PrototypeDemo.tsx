@@ -568,29 +568,6 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
           onReset={handleReset}
         />
 
-        <OrchestratorHarnessSection
-          isStreaming={isStreaming}
-          streamingPhase={streamingPhase}
-          streamingModel={streamingModel}
-          streamTokenCount={streamTokenCount}
-          streamDurationMs={streamDurationMs}
-          activeTransitionKind={activeTransitionKind}
-          agentSummary={agentSummary}
-          specialistHandoff={specialistHandoff}
-          onUpdateSpecialistHandoff={setSpecialistHandoff}
-          displaySummary={displaySummary}
-          displayHandoff={displayHandoff}
-          aiMetadata={aiMetadata}
-          privacyReport={privacyReport}
-          trace={trace}
-          obligations={obligations}
-          patient={patient}
-          loading={loading}
-          onRunTransition={runTransition}
-          onOpenFhirExport={() => setShowFhirExportModal(true)}
-          onOpenVerifyModal={setVerifyTarget}
-        />
-
         <ObligationPassportSection
           obligations={obligations}
           initialLoading={initialLoading}
@@ -613,6 +590,29 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
             void handleExplainObligation(obl);
           }}
           explainingId={explainLoading ? explainTarget?.id ?? null : null}
+        />
+
+        <OrchestratorHarnessSection
+          isStreaming={isStreaming}
+          streamingPhase={streamingPhase}
+          streamingModel={streamingModel}
+          streamTokenCount={streamTokenCount}
+          streamDurationMs={streamDurationMs}
+          activeTransitionKind={activeTransitionKind}
+          agentSummary={agentSummary}
+          specialistHandoff={specialistHandoff}
+          onUpdateSpecialistHandoff={setSpecialistHandoff}
+          displaySummary={displaySummary}
+          displayHandoff={displayHandoff}
+          aiMetadata={aiMetadata}
+          privacyReport={privacyReport}
+          trace={trace}
+          obligations={obligations}
+          patient={patient}
+          loading={loading}
+          onRunTransition={runTransition}
+          onOpenFhirExport={() => setShowFhirExportModal(true)}
+          onOpenVerifyModal={setVerifyTarget}
         />
 
         <AuditGovernanceSection

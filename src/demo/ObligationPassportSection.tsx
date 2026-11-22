@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  ArrowRight,
   CheckCircle2,
   Clock,
   Code2,
@@ -16,12 +17,84 @@ import {
 import { getDefaultDocIdForObligation } from "../ClinicalDocumentsDrawer";
 import ClinicalMetricVisualizer from "./ClinicalMetricVisualizer";
 import {
-  PRIORITY_STYLES,
-  STATUS_STYLES,
   SYNTHETIC_FHIR_RECORDS,
 } from "./constants";
 import { getUrgentDueChip } from "./helpers";
 import type { Obligation, SafetyBlockInfo } from "./types";
+
+function getPlainStatusBadge(obl: Obligation): { label: string; className: string } {
+  if (obl.status === "VERIFIED_CLOSED") {
+    return {
+      label: "Verified & Closed",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    };
+  }
+  if (obl.status === "DEFERRED_TO_POSTPARTUM") {
+    return {
+      label: "Deferred until Postpartum",
+      className: "border-indigo-200 bg-indigo-50 text-indigo-800",
+    };
+  }
+  if (obl.status === "ESCALATED_FOR_REVIEW") {
+    return {
+      label: "Urgent · Specialist Review",
+      className: "border-rose-200 bg-rose-50 text-rose-800",
+    };
+  }
+  if (obl.priority === "HIGH") {
+    return {
+      label: "High Priority · Open",
+      className: "border-amber-200 bg-amber-50 text-amber-800",
+    };
+  }
+  return {
+    label: "Open Follow-up",
+    className: "border-slate-200 bg-slate-100 text-slate-700",
+  };
+}
+
+function getTransitionDiff(
+  obl: Obligation,
+  urgentDue: string | null
+): { before: string; after: string; reason: string | null } | null {
+  if (obl.life_stage === "Preconception" && obl.status === "OPEN") {
+    return null;
+  }
+
+  const isImmuneOrHpv =
+    obl.rule_version.startsWith("RB-IMMUNE-") || obl.rule_version.startsWith("RB-HPV-");
+
+  if (obl.status === "DEFERRED_TO_POSTPARTUM") {
+    return {
+      before: "Preconception · Medium · Open",
+      after: `${obl.life_stage} · High · Deferred until Postpartum`,
+      reason:
+        "Priority elevated from MEDIUM to HIGH so pre-discharge postpartum immunization is locked onto the delivery checklist.",
+    };
+  }
+
+  if (obl.status === "ESCALATED_FOR_REVIEW") {
+    return {
+      before: isImmuneOrHpv ? "Deferred in Pregnancy" : "Preconception · High · Open",
+      after: `${obl.life_stage} · Urgent · Escalated${urgentDue ? ` (${urgentDue})` : ""}`,
+      reason: null,
+    };
+  }
+
+  if (obl.status === "VERIFIED_CLOSED") {
+    return {
+      before: "Open Clinical Gap",
+      after: `${obl.life_stage} · Verified Closed`,
+      reason: null,
+    };
+  }
+
+  return {
+    before: "Preconception · Open",
+    after: `${obl.life_stage} · Active Care Plan`,
+    reason: null,
+  };
+}
 
 interface ObligationPassportSectionProps {
   obligations: Obligation[];
@@ -111,6 +184,8 @@ export default function ObligationPassportSection({
         const isFhirOpen = expandedFhirId === obl.id;
         const urgentDue = getUrgentDueChip(obl);
         const safetyBlock = safetyBlockFeedback[obl.id];
+        const statusBadge = getPlainStatusBadge(obl);
+        const transitionDiff = getTransitionDiff(obl, urgentDue);
 
         return (
           <article
@@ -122,18 +197,9 @@ export default function ObligationPassportSection({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-xs text-slate-400">{obl.id}</span>
                   <span
-                    className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
-                      PRIORITY_STYLES[obl.priority] ?? "bg-slate-100 text-slate-700"
-                    }`}
+                    className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${statusBadge.className}`}
                   >
-                    {obl.priority}
-                  </span>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      STATUS_STYLES[obl.status] ?? "bg-slate-100 text-slate-700"
-                    }`}
-                  >
-                    {obl.status}
+                    {statusBadge.label}
                   </span>
                   {urgentDue && (
                     <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 font-mono text-[11px] font-medium text-rose-800">
@@ -141,6 +207,9 @@ export default function ObligationPassportSection({
                       {urgentDue}
                     </span>
                   )}
+                  <span className="font-mono text-[10px] text-slate-400">
+                    {obl.status}
+                  </span>
                 </div>
                 <h4 className="mt-2 text-base font-semibold text-slate-900">
                   {obl.title}
@@ -208,6 +277,23 @@ export default function ObligationPassportSection({
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
+              </div>
+            )}
+
+            {transitionDiff && (
+              <div className="mt-3 rounded-lg border border-slate-200/80 bg-slate-50 px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-slate-500">
+                    Before: <span className="font-medium text-slate-700">{transitionDiff.before}</span>
+                  </span>
+                  <ArrowRight className="h-3.5 w-3.5 shrink-0 text-teal-600" aria-hidden="true" />
+                  <span className="font-semibold text-slate-900">
+                    After: {transitionDiff.after}
+                  </span>
+                </div>
+                {transitionDiff.reason && (
+                  <p className="mt-1 text-[11px] text-slate-600">{transitionDiff.reason}</p>
+                )}
               </div>
             )}
 

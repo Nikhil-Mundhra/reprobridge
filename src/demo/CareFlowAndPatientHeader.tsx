@@ -4,9 +4,8 @@ import {
   Building2,
   Check,
   CheckCircle2,
-  Info,
+  Lock,
   RotateCcw,
-  ShieldAlert,
   Sparkles,
 } from "lucide-react";
 import {
@@ -43,43 +42,55 @@ export default function CareFlowAndPatientHeader({
 }: CareFlowAndPatientHeaderProps) {
   const activePatientId = patient?.patient_id ?? "PAT-AE-4092";
   const facilityStages = PATIENT_FACILITY_STAGES[activePatientId] ?? FACILITY_CONTINUITY_STAGES;
-  const openPrimaryObl = obligations.find(
-    (o) => o.status !== "VERIFIED_CLOSED" && o.status !== "DEFERRED_TO_POSTPARTUM"
-  );
-  const deferredObl = obligations.find((o) => o.status === "DEFERRED_TO_POSTPARTUM");
+  const currentFacilityIdx = isPostpartum ? 2 : isAntenatal ? 1 : 0;
+
+  const escalatedCount = obligations.filter(
+    (o) => o.status === "ESCALATED_FOR_REVIEW"
+  ).length;
+  const deferredCount = obligations.filter(
+    (o) => o.status === "DEFERRED_TO_POSTPARTUM"
+  ).length;
+  const closedCount = obligations.filter((o) => o.status === "VERIFIED_CLOSED").length;
+  const currentStepMeta =
+    FLOW_STEPS.find((s) => s.step === activeStep) ?? FLOW_STEPS[2];
+
+  const transitionOutcomeSegments: string[] = [];
+  if (escalatedCount > 0) {
+    transitionOutcomeSegments.push(
+      `${escalatedCount} ${escalatedCount === 1 ? "gap" : "gaps"} escalated (${isPostpartum ? "pre-discharge ≤ 48h" : "due ≤ 72h"})`
+    );
+  }
+  if (deferredCount > 0) {
+    transitionOutcomeSegments.push(`${deferredCount} safely deferred to postpartum`);
+  }
+  if (closedCount > 0) {
+    transitionOutcomeSegments.push(`${closedCount} verified closed`);
+  }
+  transitionOutcomeSegments.push("0 patient identifiers sent to AI");
 
   return (
     <>
-      {/* 6-Step Care Continuity Flow */}
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-          End-to-End Care-Continuity Flow
-        </p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-          {FLOW_STEPS.map((item) => {
-            const completed = item.step <= activeStep;
-            return (
-              <div
-                key={item.step}
-                className={`rounded-lg border p-2.5 text-xs transition ${
-                  completed
-                    ? "border-teal-200 bg-teal-50/70 text-teal-950"
-                    : "border-slate-100 bg-slate-50 text-slate-400"
-                }`}
-              >
-                <div className="flex items-center justify-between font-semibold">
-                  <span>Step {item.step}</span>
-                  {completed && <CheckCircle2 className="h-3.5 w-3.5 text-teal-600" />}
-                </div>
-                <p className="mt-1 font-medium">{item.label}</p>
-                <p className="mt-0.5 text-[11px] opacity-80">{item.desc}</p>
-              </div>
-            );
-          })}
+      {/* 5-Second Value Proposition Header */}
+      <section className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-teal-700">
+            Detect. Carry forward. Verify.
+          </p>
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-0.5 text-[11px] font-semibold text-teal-800"
+            title={currentStepMeta.desc}
+          >
+            <CheckCircle2 className="h-3 w-3 text-teal-600" aria-hidden="true" />
+            Step {activeStep}/6 · {currentStepMeta.label}
+          </span>
         </div>
+        <h1 className="mt-1 text-base font-semibold text-slate-900">
+          Continuous reproductive care obligations across disconnected clinics and maternity
+          hospitals — nothing dropped at life-stage transitions.
+        </h1>
       </section>
 
-      {/* Patient Header & Life-Stage Transition Actions */}
+      {/* Patient Header, 5-Second Outcome Strip & Hero Care-Site Continuity Spine */}
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -99,6 +110,12 @@ export default function CareFlowAndPatientHeader({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
+            {(!isAntenatal || isAntenatal) && !isPostpartum && (
+              <span className="hidden items-center gap-1 rounded-full bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-800 sm:inline-flex">
+                Next action
+                <ArrowRight className="h-3 w-3 text-teal-600" aria-hidden="true" />
+              </span>
+            )}
             {!isAntenatal && !isPostpartum && (
               <button
                 onClick={() => onRunTransition("/api/transitions/pregnancy")}
@@ -130,46 +147,128 @@ export default function CareFlowAndPatientHeader({
           </div>
         </div>
 
-        {/* Compact Care-Site Provenance Trail */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-slate-100 pt-3.5 text-xs">
-          <span className="inline-flex items-center gap-1.5 font-medium text-slate-400">
-            <Building2 className="h-3.5 w-3.5" aria-hidden="true" />
-            Care Sites:
-          </span>
-          <ol className="flex flex-wrap items-center gap-1.5">
-            {facilityStages.map((stage, idx) => {
-              const currentFacilityIdx = isPostpartum ? 2 : isAntenatal ? 1 : 0;
+        {/* 5-Second Post-Transition Takeaway Strip */}
+        {(isAntenatal || isPostpartum) && obligations.length > 0 && (
+          <div
+            role="status"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3.5 py-2.5 text-xs font-medium text-emerald-950"
+          >
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
+              <span>
+                <strong className="font-semibold">
+                  {isPostpartum ? "Postpartum confirmed:" : "Pregnancy confirmed:"}
+                </strong>{" "}
+                {transitionOutcomeSegments.join(", ")}.
+              </span>
+            </div>
+            <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+              <Lock className="h-3 w-3" aria-hidden="true" />
+              Zero PHI Egress
+            </span>
+          </div>
+        )}
+
+        {/* Hero 3-Facility Care-Site Continuity Spine */}
+        <div className="border-t border-slate-100 pt-4">
+          <div className="mb-2.5 flex items-center justify-between text-xs">
+            <span className="inline-flex items-center gap-1.5 font-semibold uppercase tracking-wider text-slate-500">
+              <Building2 className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
+              Cross-System Care Continuity Spine (1 Patient · 3 Disconnected EMRs)
+            </span>
+          </div>
+
+          <ol className="grid gap-3 sm:grid-cols-3">
+            {facilityStages.map((stage) => {
               const isDone = stage.stageIndex < currentFacilityIdx;
               const isCurrent = stage.stageIndex === currentFacilityIdx;
 
+              // Map each obligation to its active facility stage (deferred items pre-stationed on Postpartum Stage 2)
+              const siteObligations = obligations.filter((obl) => {
+                if (obl.status === "DEFERRED_TO_POSTPARTUM") {
+                  return stage.stageIndex === 2;
+                }
+                return stage.stageIndex === currentFacilityIdx;
+              });
+
               return (
-                <li key={stage.dayTag} className="inline-flex items-center gap-1.5">
-                  <span
-                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs ${
-                      isCurrent
-                        ? "border-teal-300 bg-teal-50 font-medium text-teal-950"
-                        : isDone
-                          ? "border-emerald-200 bg-emerald-50/60 text-emerald-900"
-                          : "border-slate-200 bg-slate-50 text-slate-400"
-                    }`}
-                  >
-                    {isDone ? (
-                      <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" />
-                    ) : (
+                <li
+                  key={stage.dayTag}
+                  className={`flex flex-col justify-between rounded-xl border p-3.5 transition ${
+                    isCurrent
+                      ? "border-teal-300 bg-teal-50/70 ring-1 ring-teal-500/20"
+                      : isDone
+                        ? "border-emerald-200 bg-emerald-50/40"
+                        : "border-slate-200 bg-slate-50/80"
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="font-mono font-semibold text-slate-600">
+                        {stage.dayTag}
+                      </span>
                       <span
-                        aria-hidden="true"
-                        className={`h-1.5 w-1.5 rounded-full ${
-                          isCurrent ? "bg-teal-600" : "bg-slate-300"
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          isCurrent
+                            ? "bg-teal-600 text-white"
+                            : isDone
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-slate-200/80 text-slate-600"
                         }`}
-                      />
-                    )}
-                    <span>{stage.facility}</span>
-                    <span className="font-mono text-[10px] opacity-75">
-                      {stage.emrSystem} · {stage.dayTag}
-                    </span>
-                  </span>
-                  {idx < facilityStages.length - 1 && (
-                    <ArrowRight className="h-3 w-3 text-slate-300" aria-hidden="true" />
+                      >
+                        {isDone && <Check className="h-2.5 w-2.5" aria-hidden="true" />}
+                        {isCurrent
+                          ? "Active Care Site"
+                          : isDone
+                            ? "Completed"
+                            : siteObligations.length > 0
+                              ? "Queued Handoff"
+                              : "Upcoming"}
+                      </span>
+                    </div>
+
+                    <p className="mt-1.5 text-sm font-semibold text-slate-900">
+                      {stage.facility}
+                    </p>
+                    <p className="mt-0.5 font-mono text-[11px] text-slate-500">
+                      {stage.emrSystem}
+                    </p>
+                  </div>
+
+                  {siteObligations.length > 0 && (
+                    <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-slate-200/60 pt-2">
+                      {siteObligations.map((obl) => {
+                        const isDeferred = obl.status === "DEFERRED_TO_POSTPARTUM";
+                        const isEscalated = obl.status === "ESCALATED_FOR_REVIEW";
+                        const isClosed = obl.status === "VERIFIED_CLOSED";
+
+                        return (
+                          <span
+                            key={obl.id}
+                            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-semibold ${
+                              isClosed
+                                ? "border-emerald-200 bg-white text-emerald-800"
+                                : isEscalated
+                                  ? "border-rose-200 bg-rose-50 text-rose-800"
+                                  : isDeferred
+                                    ? "border-indigo-200 bg-indigo-50 text-indigo-800"
+                                    : "border-slate-200 bg-white text-slate-700"
+                            }`}
+                          >
+                            <span>{obl.id}</span>
+                            <span className="font-sans font-medium">
+                              {isClosed
+                                ? "Verified"
+                                : isEscalated
+                                  ? "Urgent"
+                                  : isDeferred
+                                    ? "Deferred"
+                                    : "Active"}
+                            </span>
+                          </span>
+                        );
+                      })}
+                    </div>
                   )}
                 </li>
               );
@@ -177,57 +276,15 @@ export default function CareFlowAndPatientHeader({
           </ol>
         </div>
 
+        {/* Single-Line Hybrid Safety Summary */}
         {!isPostpartum && (
-          <div
-            role="note"
-            className={`flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-xs leading-relaxed ${
-              isAntenatal && openPrimaryObl
-                ? "border-amber-200 bg-amber-50/80 text-amber-950"
-                : "border-slate-200 bg-slate-50 text-slate-700"
-            }`}
-          >
-            {isAntenatal && openPrimaryObl ? (
-              <>
-                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-                <p>
-                  <span className="font-semibold text-amber-900">
-                    Before triggering Postpartum:
-                  </span>{" "}
-                  <span className="font-mono font-medium">{openPrimaryObl.id}</span> is still open. You can verify &amp; close it below first, or proceed — Postpartum Transition will carry{" "}
-                  <span className="font-mono">{openPrimaryObl.id}</span> forward for 6-week reassessment
-                  {deferredObl ? (
-                    <>
-                      , reactivate deferred <span className="font-mono">{deferredObl.id}</span> as{" "}
-                      <span className="font-semibold">URGENT</span>
-                    </>
-                  ) : null}
-                  , and call external assistive AI (OpenRouter) with <span className="font-semibold">0 PHI</span> to draft a handoff for clinician sign-off.
-                </p>
-              </>
-            ) : isAntenatal ? (
-              <>
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
-                <p>
-                  <span className="font-semibold text-slate-900">
-                    Postpartum Transition Notice:
-                  </span>{" "}
-                  Runs deterministic postpartum rules (lifting pregnancy deferral guards and reactivating{" "}
-                  <span className="font-mono">{deferredObl?.id ?? "deferred obligations"}</span> as{" "}
-                  <span className="font-semibold">URGENT</span>), strips all UAE PHI, and calls OpenRouter solely to draft an assistive OB-GYN handoff pending clinician approval.
-                </p>
-              </>
-            ) : (
-              <>
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-                <p>
-                  <span className="font-semibold text-slate-900">
-                    Hybrid AI &amp; Safety Notice:
-                  </span>{" "}
-                  Triggering a life-stage transition executes deterministic clinical rules in Neon Postgres first, strips all UAE PHI via the Privacy Firewall, and uses external assistive AI (OpenRouter) only to draft a de-identified clinician handoff — never to diagnose, prescribe, or close obligations.
-                </p>
-              </>
-            )}
-          </div>
+          <p className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <Lock className="h-3.5 w-3.5 shrink-0 text-teal-700" aria-hidden="true" />
+            <span>
+              <strong className="font-semibold text-slate-800">Hybrid Safety Guarantee:</strong>{" "}
+              Deterministic local rules decide all escalations and deferrals; external AI sees 0 PHI and never diagnoses, prescribes, or closes obligations.
+            </span>
+          </p>
         )}
       </section>
     </>

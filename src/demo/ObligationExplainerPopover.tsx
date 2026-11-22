@@ -299,12 +299,14 @@ export default function ObligationExplainerPopover({
                     aria-hidden="true"
                     className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-600 motion-reduce:animate-none"
                   />
-                  Streaming{streamModel ? ` · ${streamModel}` : ""}
+                  Streaming{streamModel ? ` · ${streamModel.replace(/:free$/i, "")}` : ""}
                   {streamTokenCount > 0 ? ` (${streamTokenCount})` : ""}
                 </span>
               ) : data ? (
                 <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[10px] text-slate-600">
-                  {isOpenRouter ? data.ai_metadata.model : "Local Fallback"}
+                  {isOpenRouter
+                    ? data.ai_metadata.model.replace(/:free$/i, "")
+                    : "Local Fallback"}
                 </span>
               ) : null}
             </div>
