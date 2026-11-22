@@ -5,6 +5,7 @@ import {
   Database,
   FileText,
   Lock,
+  Network,
   ShieldCheck,
 } from "lucide-react";
 import type { HealthResponse } from "./types";
@@ -12,15 +13,19 @@ import type { HealthResponse } from "./types";
 interface DemoTopBarProps {
   health: HealthResponse | null;
   totalClinicalDocCount: number;
+  connectedIntegrationCount?: number;
   onBackToTutorial: () => void;
   onOpenClinicalDocuments: () => void;
+  onOpenIntegrations?: () => void;
 }
 
 export default function DemoTopBar({
   health,
   totalClinicalDocCount,
+  connectedIntegrationCount = 4,
   onBackToTutorial,
   onOpenClinicalDocuments,
+  onOpenIntegrations,
 }: DemoTopBarProps) {
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const statusPopoverId = useId();
@@ -161,6 +166,21 @@ export default function DemoTopBar({
               </div>
             </div>
           </div>
+
+          {onOpenIntegrations && (
+            <button
+              type="button"
+              onClick={onOpenIntegrations}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-2xs transition hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-950"
+              title="Open HIE & EMR Integrations Hub (Malaffi, Oracle Health, Epic, Nabidh)"
+            >
+              <Network className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
+              <span>Integrations</span>
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700">
+                {connectedIntegrationCount}
+              </span>
+            </button>
+          )}
 
           <button
             type="button"

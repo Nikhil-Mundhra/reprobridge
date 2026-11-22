@@ -5,6 +5,7 @@ import CareFlowAndPatientHeader from "./demo/CareFlowAndPatientHeader";
 import DemoTopBar from "./demo/DemoTopBar";
 import FhirExportModal from "./demo/FhirExportModal";
 import FloatingDocsTab from "./demo/FloatingDocsTab";
+import IntegrationsDrawer, { FloatingIntegrationsTab } from "./demo/IntegrationsDrawer";
 import ObligationExplainerPopover from "./demo/ObligationExplainerPopover";
 import ObligationIntakeModal from "./demo/ObligationIntakeModal";
 import ObligationPassportSection from "./demo/ObligationPassportSection";
@@ -90,6 +91,9 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
   const [docsDrawerOpen, setDocsDrawerOpen] = useState(false);
   const [docsInitialId, setDocsInitialId] = useState<string | null>(null);
   const [docsPrefs, setDocsPrefs] = useState<DocsSessionPrefs>(() => readDocsSessionPrefs());
+  const [integrationsDrawerOpen, setIntegrationsDrawerOpen] = useState(false);
+  const [integrationsSide, setIntegrationsSide] = useState<"left" | "right">("right");
+  const [connectedIntegrationCount, setConnectedIntegrationCount] = useState(4);
 
   const [explainTarget, setExplainTarget] = useState<Obligation | null>(null);
   const [explainLoading, setExplainLoading] = useState(false);
@@ -531,8 +535,10 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
       <DemoTopBar
         health={health}
         totalClinicalDocCount={totalClinicalDocCount}
+        connectedIntegrationCount={connectedIntegrationCount}
         onBackToTutorial={onBackToTutorial}
         onOpenClinicalDocuments={() => openClinicalDocuments()}
+        onOpenIntegrations={() => setIntegrationsDrawerOpen(true)}
       />
 
       <PatientCohortBar
@@ -668,6 +674,14 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         onOpen={() => openClinicalDocuments()}
       />
 
+      {/* Draggable Edge-Snapping Tab for HIE & EMR Integrations Hub */}
+      <FloatingIntegrationsTab
+        connectedCount={connectedIntegrationCount}
+        initialSide={integrationsSide}
+        onDockChange={(side) => setIntegrationsSide(side)}
+        onOpen={() => setIntegrationsDrawerOpen(true)}
+      />
+
       {/* Floating Zero-PHI AI Explainer with Browser Speech Audio */}
       <ObligationExplainerPopover
         obligation={explainTarget}
@@ -706,6 +720,18 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
         onDrawerWidthChange={(drawerWidth) =>
           setDocsPrefs((prev) => ({ ...prev, drawerWidth }))
         }
+      />
+
+      {/* HIE & EMR Integrations Side Drawer */}
+      <IntegrationsDrawer
+        isOpen={integrationsDrawerOpen}
+        onClose={() => setIntegrationsDrawerOpen(false)}
+        side={integrationsSide}
+        drawerWidth={docsPrefs.drawerWidth}
+        onDrawerWidthChange={(drawerWidth) =>
+          setDocsPrefs((prev) => ({ ...prev, drawerWidth }))
+        }
+        onConnectedCountChange={setConnectedIntegrationCount}
       />
     </div>
   );

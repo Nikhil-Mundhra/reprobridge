@@ -1334,3 +1334,59 @@ describe("<ObligationExplainerPopover /> & OBL Explain workflow", () => {
     }
   });
 });
+
+describe("<IntegrationsDrawer /> & <FloatingIntegrationsTab /> HIE/EMR Integrations Hub", () => {
+  it("opens HIE & EMR Integrations Hub from floating tab, displays Malaffi and Oracle Health logos, and adds a custom EMR", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const pathname = new URL(url, "http://localhost").pathname;
+      if (pathname === "/api/health") {
+        return createJsonResponse({
+          status: "ok",
+          residency_policy: "UAE_PHI_LOCAL_ONLY",
+          ai_provider: { provider: "openrouter", configured: true, model: "google/gemma-4-31b-it:free" },
+          database: { provider: "neon-postgres", connected: true, branch: "main", pooled: true, detail: "Connected" },
+        });
+      }
+      if (pathname === "/api/obligations") {
+        return createJsonResponse({
+          patient_id: "PAT-AE-4092",
+          obligations: makeSeedObligations(),
+          audit_events: [],
+        });
+      }
+      return createJsonResponse({ detail: "Not mocked" }, 404);
+    });
+
+    render(<PrototypeDemo onBackToTutorial={vi.fn()} />);
+    await screen.findByText("Clinical Obligation Passport (2)");
+
+    const floatingTab = screen.getByRole("button", {
+      name: /Open HIE & EMR Integrations Hub \(4 connected\)/i,
+    });
+    await user.click(floatingTab);
+
+    const dialog = await screen.findByRole("dialog", {
+      name: /HIE & EMR Integrations Hub/i,
+    });
+    expect(within(dialog).getByText("Malaffi (Abu Dhabi HIE)")).toBeInTheDocument();
+    expect(within(dialog).getByText("Oracle Health (Cerner Millennium)")).toBeInTheDocument();
+    expect(within(dialog).getByText("Epic Systems (EpicCare & Stork OB)")).toBeInTheDocument();
+    expect(within(dialog).getByAltText("Malaffi (Abu Dhabi HIE) logo")).toBeInTheDocument();
+    expect(within(dialog).getByAltText("Oracle Health (Cerner Millennium) logo")).toBeInTheDocument();
+
+    // Add a custom hospital EMR integration
+    await user.click(within(dialog).getByRole("button", { name: /Add EMR \/ Hospital/i }));
+    await user.type(
+      within(dialog).getByPlaceholderText(/e\.g\. Allscripts Sunrise \/ NMC Royal EHR/i),
+      "NMC Royal Sunrise EHR"
+    );
+    await user.click(within(dialog).getByRole("button", { name: /Connect Endpoint/i }));
+
+    expect(within(dialog).getByText("NMC Royal Sunrise EHR")).toBeInTheDocument();
+    expect(within(dialog).getByText(/5 Connected/)).toBeInTheDocument();
+
+    vi.restoreAllMocks();
+  });
+});
