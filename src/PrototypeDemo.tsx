@@ -347,6 +347,17 @@ export default function PrototypeDemo({
     return () => window.removeEventListener("keydown", onEscape);
   }, [docsDrawerOpen, verifyTarget, showFhirExportModal, showIntakeModal]);
 
+  function scrollToHarness() {
+    const behavior: ScrollBehavior = window.matchMedia?.("(prefers-reduced-motion: reduce)")
+      ?.matches
+      ? "auto"
+      : "smooth";
+    requestAnimationFrame(() => {
+      const el = document.getElementById("hybrid-care-resolution-harness");
+      el?.scrollIntoView?.({ behavior, block: "start" });
+    });
+  }
+
   async function runTransition(
     endpoint: "/api/transitions/pregnancy" | "/api/transitions/postpartum"
   ) {
@@ -355,6 +366,7 @@ export default function PrototypeDemo({
     setActiveTransitionKind(kind);
     setLoading(true);
     setIsStreaming(true);
+    scrollToHarness();
     setStreamingPhase("Running deterministic clinical rules & UAE PHI firewall…");
     setStreamingRawText("");
     setStreamingModel(null);
@@ -648,8 +660,10 @@ export default function PrototypeDemo({
           isPostpartum={isPostpartum}
           obligations={obligations}
           loading={loading}
+          hasHarnessBrief={isStreaming || Boolean(agentSummary)}
           onRunTransition={runTransition}
           onReset={handleReset}
+          onScrollToHarness={scrollToHarness}
         />
 
         <ObligationPassportSection

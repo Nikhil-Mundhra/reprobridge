@@ -161,9 +161,10 @@ export default function OrchestratorHarnessSection({
 
   return (
     <section
+      id="hybrid-care-resolution-harness"
       aria-live="polite"
       aria-busy={isStreaming}
-      className="space-y-4 rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm text-teal-950"
+      className="scroll-mt-16 space-y-4 rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm text-teal-950"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">

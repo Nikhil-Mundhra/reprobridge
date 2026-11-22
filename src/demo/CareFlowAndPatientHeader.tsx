@@ -23,10 +23,12 @@ interface CareFlowAndPatientHeaderProps {
   isPostpartum: boolean;
   obligations: Obligation[];
   loading: boolean;
+  hasHarnessBrief?: boolean;
   onRunTransition: (
     endpoint: "/api/transitions/pregnancy" | "/api/transitions/postpartum"
   ) => void;
   onReset: () => void;
+  onScrollToHarness?: () => void;
 }
 
 export interface CareSiteContinuitySpineProps {
@@ -44,8 +46,10 @@ export default function CareFlowAndPatientHeader({
   isPostpartum,
   obligations,
   loading,
+  hasHarnessBrief = false,
   onRunTransition,
   onReset,
+  onScrollToHarness,
 }: CareFlowAndPatientHeaderProps) {
   const activePatientId = patient?.patient_id ?? "PAT-AE-4092";
 
@@ -140,6 +144,16 @@ export default function CareFlowAndPatientHeader({
               Trigger Postpartum Transition
             </button>
           )}
+          {hasHarnessBrief && onScrollToHarness && (
+            <button
+              type="button"
+              onClick={onScrollToHarness}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-800 shadow-2xs transition hover:bg-teal-100"
+            >
+              <Sparkles className="h-4 w-4 text-teal-700" aria-hidden="true" />
+              View AI Brief
+            </button>
+          )}
           <button
             onClick={onReset}
             disabled={loading}
@@ -166,10 +180,21 @@ export default function CareFlowAndPatientHeader({
               {transitionOutcomeSegments.join(", ")}.
             </span>
           </div>
-          <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
-            <Lock className="h-3 w-3" aria-hidden="true" />
-            Zero PHI Egress
-          </span>
+          {onScrollToHarness && hasHarnessBrief ? (
+            <button
+              type="button"
+              onClick={onScrollToHarness}
+              className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800 transition hover:bg-emerald-100"
+            >
+              <Lock className="h-3 w-3" aria-hidden="true" />
+              Zero PHI Egress · AI Brief
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+              <Lock className="h-3 w-3" aria-hidden="true" />
+              Zero PHI Egress
+            </span>
+          )}
         </div>
       )}
     </section>

@@ -736,6 +736,7 @@ describe("<PrototypeDemo /> component workflows", () => {
 
   it("streams pregnancy transition, updates obligation states, and displays trace + UAE privacy firewall", async () => {
     const user = userEvent.setup();
+    const scrollSpy = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
     render(<PrototypeDemo onBackToTutorial={vi.fn()} />);
 
     const main = screen.getByRole("main");
@@ -747,6 +748,21 @@ describe("<PrototypeDemo /> component workflows", () => {
         "Pregnancy transition escalated TSH follow-up and deferred live MMR."
       )
     ).toBeInTheDocument();
+
+    const harnessEl = document.getElementById("hybrid-care-resolution-harness");
+    expect(harnessEl).not.toBeNull();
+    await waitFor(() => {
+      expect(scrollSpy).toHaveBeenCalled();
+      expect(scrollSpy.mock.instances).toContain(harnessEl);
+    });
+
+    scrollSpy.mockClear();
+    await user.click(within(main).getByRole("button", { name: /View AI Brief/i }));
+    await waitFor(() => {
+      expect(scrollSpy).toHaveBeenCalled();
+      expect(scrollSpy.mock.instances).toContain(harnessEl);
+    });
+    scrollSpy.mockRestore();
     expect(within(main).getByText("Antenatal (Trimester 1)")).toBeInTheDocument();
     expect(within(main).getByText("ESCALATED_FOR_REVIEW")).toBeInTheDocument();
     expect(within(main).getByText("DEFERRED_TO_POSTPARTUM")).toBeInTheDocument();
