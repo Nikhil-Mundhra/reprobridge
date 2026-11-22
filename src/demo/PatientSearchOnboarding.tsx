@@ -32,6 +32,37 @@ interface PatientSearchOnboardingProps {
 
 type StageFilter = "ALL" | "Preconception" | "Antenatal" | "Postpartum";
 
+function getLifeStageBadgeStyle(lifeStage: string): string {
+  if (lifeStage === "Postpartum") {
+    return "border-indigo-200 bg-indigo-50 text-indigo-800";
+  }
+  if (lifeStage.startsWith("Antenatal")) {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+  return "border-sky-200 bg-sky-50 text-sky-800";
+}
+
+function getStageFilterStyle(stageOpt: StageFilter, active: boolean): string {
+  if (stageOpt === "Preconception") {
+    return active
+      ? "bg-sky-600 text-white shadow-2xs"
+      : "border border-sky-200 bg-sky-50/70 text-sky-800 hover:bg-sky-100";
+  }
+  if (stageOpt === "Antenatal") {
+    return active
+      ? "bg-amber-600 text-white shadow-2xs"
+      : "border border-amber-200 bg-amber-50/70 text-amber-800 hover:bg-amber-100";
+  }
+  if (stageOpt === "Postpartum") {
+    return active
+      ? "bg-indigo-600 text-white shadow-2xs"
+      : "border border-indigo-200 bg-indigo-50/70 text-indigo-800 hover:bg-indigo-100";
+  }
+  return active
+    ? "bg-teal-600 text-white shadow-2xs"
+    : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100";
+}
+
 function inferTargetLifeStage(
   answer: string,
   fallbackStage: string
@@ -421,9 +452,9 @@ export default function PatientSearchOnboarding({
             <img
               src="/reprobridge-logo-full.png"
               alt="ReproBridge — Connected care for women"
-              width={136}
-              height={42}
-              className="h-7 w-auto object-contain"
+              width={272}
+              height={84}
+              className="h-14 w-auto object-contain"
             />
           </div>
 
@@ -486,11 +517,10 @@ export default function PatientSearchOnboarding({
                           type="button"
                           onClick={() => setStageFilter(stageOpt)}
                           aria-pressed={active}
-                          className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                          className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${getStageFilterStyle(
+                            stageOpt,
                             active
-                              ? "bg-teal-600 text-white shadow-2xs"
-                              : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
-                          }`}
+                          )}`}
                         >
                           {stageOpt === "ALL" ? "All Stages" : stageOpt}
                         </button>
@@ -535,7 +565,11 @@ export default function PatientSearchOnboarding({
                           </h2>
                           <p className="text-xs text-slate-500">{p.age_sex}</p>
                         </div>
-                        <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-medium text-slate-700">
+                        <span
+                          className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${getLifeStageBadgeStyle(
+                            p.life_stage
+                          )}`}
+                        >
                           {p.life_stage}
                         </span>
                       </div>
@@ -608,7 +642,11 @@ export default function PatientSearchOnboarding({
                   <span className="font-mono text-xs font-semibold text-teal-700">
                     {selectedPatient.patient_id}
                   </span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                  <span
+                    className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${getLifeStageBadgeStyle(
+                      selectedPatient.life_stage
+                    )}`}
+                  >
                     HIE Stage: {selectedPatient.life_stage}
                   </span>
                 </div>

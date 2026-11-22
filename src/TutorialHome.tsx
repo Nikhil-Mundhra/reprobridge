@@ -92,9 +92,9 @@ export default function TutorialHome({ onLaunchDemo }: TutorialHomeProps) {
             <img
               src="/reprobridge-logo-full.png"
               alt="ReproBridge — Connected care for women"
-              width={160}
-              height={50}
-              className="h-10 w-auto object-contain"
+              width={320}
+              height={100}
+              className="h-20 w-auto object-contain"
             />
             <span className="hidden border-l border-slate-200 pl-3 text-xs font-medium text-slate-500 sm:inline">
               6-Step Interactive Walkthrough

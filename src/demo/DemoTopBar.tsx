@@ -77,9 +77,9 @@ export default function DemoTopBar({
           <img
             src="/reprobridge-logo-full.png"
             alt="ReproBridge — Connected care for women"
-            width={136}
-            height={42}
-            className="h-7 w-auto shrink-0 object-contain"
+            width={272}
+            height={84}
+            className="h-14 w-auto shrink-0 object-contain"
           />
         </div>
 
