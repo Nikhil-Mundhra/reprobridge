@@ -149,8 +149,8 @@ PATIENT_COHORT_META: dict[str, dict[str, Any]] = {
     "PAT-AE-4092": {
         "patient_id": "PAT-AE-4092",
         "patient_name": "Amira Al-Mansoori (Synthetic)",
-        "age_sex": "32Y · F",
-        "clinical_track": "Endocrine & Rubella Continuity",
+        "age_sex": "32Y · F · G2P0+1",
+        "clinical_track": "Hashimoto's (Age 16) → Prior Miscarriage (Age 31) → Pregnant Again",
         "facility_a": "Mubadala Primary Care",
         "facility_b": "Corniche OB-GYN",
         "id_base": 100,
@@ -198,11 +198,14 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "id": "OBL-101",
         "patient_id": "PAT-AE-4092",
         "patient_name": "Amira Al-Mansoori (Synthetic)",
-        "life_stage": "Preconception",
-        "title": "Subclinical Hypothyroidism Follow-up (TSH 4.8 mIU/L)",
+        "life_stage": "Antenatal (Trimester 1)",
+        "title": "Hashimoto's Hypothyroidism Follow-up (TSH 4.8 mIU/L · Prior Miscarriage at 31)",
         "rationale": (
-            "Preconception lab showed elevated TSH (4.8 mIU/L). Requires repeat TSH + "
-            "free T4 and endocrinology/OB review before conception or immediately upon pregnancy."
+            "Diagnosed with Hashimoto's autoimmune hypothyroidism at age 16 and lost to follow-up "
+            "across disconnected clinics; unmanaged maternal hypothyroidism caused an early miscarriage "
+            "at age 31 (9w). Now age 32 and pregnant again (Trimester 1, G2P0+1) with elevated TSH "
+            "(4.8 mIU/L vs <2.5 mIU/L T1 target). Requires urgent repeat TSH + free T4 and OB-GYN / "
+            "endocrinology review to prevent recurrent pregnancy loss."
         ),
         "evidence_source": "FHIR Observation/obs-tsh-2026-09 (Malaffi HIE Synthetic)",
         "rule_version": "RB-THYROID-v1.4.0",
@@ -213,7 +216,7 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "trigger_event_date": "2026-09-14",
         "due_window_start": None,
         "due_window_end": None,
-        "due_label": None,
+        "due_label": "Due ≤ 72h (T1 TSH <2.5 mIU/L · Prior loss at 31)",
         "closure_policy": "CLINICIAN_EVIDENCE",
         "protocol_code": "ATA-THYROID-T1",
         "verified_by": None,
@@ -223,11 +226,12 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "id": "OBL-102",
         "patient_id": "PAT-AE-4092",
         "patient_name": "Amira Al-Mansoori (Synthetic)",
-        "life_stage": "Preconception",
+        "life_stage": "Antenatal (Trimester 1)",
         "title": "Rubella IgG Non-Immune Vaccination Verification",
         "rationale": (
-            "Preconception screening indicated Rubella IgG non-immune status. "
-            "MMR vaccination contraindicated during pregnancy; verify immunization or postpartum deferral."
+            "Serology indicated Rubella IgG non-immune status (<5 IU/mL). Now age 32 and pregnant "
+            "again (G2P0+1); live MMR vaccination is contraindicated during pregnancy and must be "
+            "locked for postpartum pre-discharge administration."
         ),
         "evidence_source": "FHIR DiagnosticReport/rep-rubella-2026-08",
         "rule_version": "RB-IMMUNE-v1.2.1",
@@ -445,7 +449,10 @@ SEED_AUDIT_EVENTS: list[dict[str, Any]] = [
         "obligation_id": "OBL-101",
         "event_type": "CARE_GAP_DETECTED",
         "actor": "RuleEngine (RB-THYROID-v1.4.0)",
-        "summary": "Logged preconception TSH 4.8 mIU/L follow-up obligation from FHIR Observation/obs-tsh-2026-09.",
+        "summary": (
+            "Logged thyroid continuity obligation (TSH 4.8 mIU/L) linking age-16 Hashimoto's "
+            "diagnosis and age-31 miscarriage into Amira's new pregnancy at age 32 (FHIR Observation/obs-tsh-2026-09)."
+        ),
     },
     {
         "obligation_id": "OBL-102",

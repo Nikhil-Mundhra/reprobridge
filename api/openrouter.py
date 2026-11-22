@@ -974,22 +974,26 @@ def _build_base_reconciliation_questions(
         }
         q3: dict[str, Any] = {
             "id": "scenario_specific",
-            "category": "Thyroid & Rubella Scenario Check",
+            "category": "Thyroid History (Age 16 → 31 → 32) & Rubella Check",
             "question": (
-                "HIE shows TSH 4.8 mIU/L (OBL-101) and Rubella IgG non-immune status (OBL-102). "
-                "Were repeat TSH labs drawn or an outside MMR shot documented before today?"
+                "HIE links Hashimoto's diagnosed at age 16, a miscarriage at age 31, and current "
+                "TSH 4.8 mIU/L (OBL-101) plus Rubella non-immune status (OBL-102) in this new "
+                "pregnancy at 32. Were repeat TSH labs drawn or an outside MMR shot documented?"
             ),
-            "data_shows": "Documents: TSH 4.8 mIU/L (Sep) & Rubella IgG Non-Immune serology",
+            "data_shows": (
+                "History: Hashimoto's (age 16) · Prior miscarriage (age 31) · Current TSH 4.8 mIU/L & Rubella Non-Immune"
+            ),
             "options": [
-                "No external repeat TSH or MMR recorded — both gaps remain open",
+                "No external repeat TSH or MMR recorded — escalate OBL-101 urgently now",
                 "Repeat TSH / Free T4 lab drawn externally this week (awaiting upload)",
-                "MMR booster completed prior to conception at outside clinic",
+                "MMR booster completed prior to this pregnancy at outside clinic",
             ],
             "placeholder": "Note external TSH values, dates, or immunization cards...",
         }
         context_note = (
-            "Cross-check gestational week (5th-week referral vs 8th-week scan) and confirm whether "
-            "outside thyroid labs or medications exist before opening the Antenatal TSH & Rubella obligations."
+            "Cross-check gestational week (5th-week referral vs 8th-week scan) in this new pregnancy "
+            "at age 32 and verify thyroid labs/medications immediately given her age-16 Hashimoto's "
+            "diagnosis and age-31 miscarriage."
         )
     elif "gestational_dysglycemia_ogtt_followup" in categories:
         q2 = {

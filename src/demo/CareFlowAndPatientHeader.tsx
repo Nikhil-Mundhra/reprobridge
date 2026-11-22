@@ -115,6 +115,24 @@ export default function CareFlowAndPatientHeader({
             Current Life Stage:{" "}
             <span className="font-medium text-teal-700">{currentLifeStage}</span>
           </p>
+          {activePatientId === "PAT-AE-4092" && (
+            <div
+              aria-label="Longitudinal patient history"
+              className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]"
+            >
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-700">
+                <strong className="font-semibold text-slate-900">Age 16:</strong> Hashimoto&apos;s thyroiditis diagnosed
+              </span>
+              <ArrowRight className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
+              <span className="rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-rose-900">
+                <strong className="font-semibold">Age 31:</strong> Early miscarriage (9w · unmanaged TSH)
+              </span>
+              <ArrowRight className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
+              <span className="rounded-md border border-teal-200 bg-teal-50 px-2 py-0.5 text-teal-900">
+                <strong className="font-semibold">Age 32 (Now):</strong> Pregnant again (G2P0+1)
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">

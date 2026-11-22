@@ -930,11 +930,12 @@ def submit_patient_reconciliation(patient_id: str, body: ReconcileSubmitRequest)
         str(o.get("life_stage", "")).startswith("Antenatal") for o in current
     )
 
+    has_unreassessed_open = any(str(o.get("status")) == "OPEN" for o in current)
     transition_triggered: str | None = None
     transition_result: dict[str, Any] | None = None
     if (
         target_stage == "Antenatal (Trimester 1)"
-        and not is_curr_antenatal
+        and (not is_curr_antenatal or has_unreassessed_open)
         and not is_curr_postpartum
     ):
         transition_triggered = "FHIR_PREGNANCY_CONFIRMED"

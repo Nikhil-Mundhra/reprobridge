@@ -18,10 +18,10 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   {
     number: "01",
     tag: "EMR / Malaffi HIE Intake",
-    title: "Capture preconception findings before they get lost",
+    title: "Surface adolescent & prior-loss history before it repeats",
     summary:
-      "Amira's preconception bloodwork arrives via HL7 FHIR R4 with two findings: elevated TSH (4.8 mIU/L) and Rubella IgG non-immune status. In fragmented clinics, these notes stay buried in an encounter PDF.",
-    actionHint: "In the prototype, click “Inspect HL7 FHIR R4 Source Record” on either card.",
+      "Amira was diagnosed with Hashimoto's hypothyroidism at age 16, lost to follow-up across fragmented clinics, and suffered an early miscarriage at age 31 from unmanaged TSH. Now age 32 and pregnant again, her HL7 FHIR R4 feed carries elevated TSH (4.8 mIU/L) and Rubella IgG non-immune status.",
+    actionHint: "In the prototype, inspect Amira's age 16 → 31 → 32 history and FHIR records.",
     imageUrl:
       "https://images.unsplash.com/photo-1579154204601-01588f351e67?auto=format&fit=crop&w=1000&q=80",
     imageAlt: "Clinical laboratory diagnostic vials and bloodwork testing",
@@ -32,7 +32,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     title: "Turn findings into auditable, rule-versioned obligations",
     summary:
       "ReproBridge logs each care gap onto a longitudinal Clinical Obligation Passport in Neon PostgreSQL—binding every obligation to its source FHIR record, deterministic rule version (RB-THYROID-v1.4.0, RB-IMMUNE-v1.2.1), and clinical owner.",
-    actionHint: "Review OBL-101 (HIGH) and OBL-102 (MEDIUM) while Amira is in Preconception.",
+    actionHint: "Review OBL-101 (HIGH) and OBL-102 (MEDIUM) as Amira enters her new pregnancy at 32.",
     imageUrl:
       "https://images.unsplash.com/photo-1576091160550-2173dba999ef?auto=format&fit=crop&w=1000&q=80",
     imageAlt: "Clinician reviewing longitudinal digital medical records on a tablet",

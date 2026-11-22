@@ -4,11 +4,11 @@ export const DEFAULT_PATIENT_COHORT: PatientCohortSummary[] = [
   {
     patient_id: "PAT-AE-4092",
     patient_name: "Amira Al-Mansoori (Synthetic)",
-    age_sex: "32Y · F",
-    clinical_track: "Endocrine & Rubella Continuity",
+    age_sex: "32Y · F · G2P0+1",
+    clinical_track: "Hashimoto's (Age 16) → Prior Miscarriage (Age 31) → Pregnant Again",
     facility_a: "Mubadala Primary Care",
     facility_b: "Corniche OB-GYN",
-    life_stage: "Preconception",
+    life_stage: "Antenatal (Trimester 1)",
     total_obligations: 2,
     open_count: 2,
     urgent_count: 0,
@@ -366,19 +366,19 @@ export const AUDIT_EVENT_META: Record<
 export const FACILITY_CONTINUITY_STAGES: FacilityStage[] = [
   {
     stageIndex: 0,
-    dayTag: "Day 0",
+    dayTag: "Age 16 → 31",
     facility: "Mubadala Primary Care",
     emrSystem: "Epic",
   },
   {
     stageIndex: 1,
-    dayTag: "Day 142",
+    dayTag: "Age 32 · Now",
     facility: "Corniche OB-GYN",
     emrSystem: "Oracle",
   },
   {
     stageIndex: 2,
-    dayTag: "Day 410",
+    dayTag: "Postpartum",
     facility: "Abu Dhabi Maternity Ward",
     emrSystem: "Inpatient",
   },

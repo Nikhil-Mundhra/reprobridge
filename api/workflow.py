@@ -210,9 +210,11 @@ def _evaluate_rule_for_obligation(
                 "due_label": "Due ≤ 72h (T1 TSH <2.5 mIU/L)",
                 "protocol_code": "ATA-THYROID-T1",
                 "rationale": (
-                    "PREGNANCY TRANSITION TRIGGERED: Preconception TSH 4.8 mIU/L exceeds "
-                    "first-trimester target (<2.5 mIU/L). Urgent levothyroxine evaluation and "
-                    "repeat thyroid panel routed for clinician approval."
+                    "PREGNANCY TRANSITION TRIGGERED: Adolescent-onset Hashimoto's hypothyroidism "
+                    "(age 16) contributed to prior miscarriage at age 31 when follow-up was lost. "
+                    "Now pregnant again at 32 with TSH 4.8 mIU/L exceeding first-trimester target "
+                    "(<2.5 mIU/L). Urgent levothyroxine evaluation and repeat thyroid panel routed "
+                    "for immediate clinician approval."
                 ),
             }
         if rule_ver.startswith("RB-IMMUNE-"):
