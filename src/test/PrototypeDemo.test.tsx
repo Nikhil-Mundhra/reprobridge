@@ -2,9 +2,11 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
+import { DEFAULT_PATIENT_COHORT } from "../demo/constants";
 import ClinicalDocumentsDrawer from "../ClinicalDocumentsDrawer";
 import ClinicalMetricVisualizer, { extractClinicalMetrics } from "../demo/ClinicalMetricVisualizer";
 import FloatingDocsTab from "../demo/FloatingDocsTab";
+import { formatClosurePolicyLabel } from "../demo/helpers";
 import {
   clearDocsSessionPrefs,
   DOCS_PREFS_COOKIE,
@@ -278,10 +280,13 @@ describe("PrototypeDemo pure helpers", () => {
     expect(detectObligationId("Review obl-101 before Friday")).toBe("OBL-101");
     expect(detectObligationId("Check thyroid TSH panel")).toBe("OBL-101");
     expect(detectObligationId("Schedule Rubella MMR postpartum")).toBe("OBL-102");
-    expect(detectObligationId("Routine blood pressure check")).toBeNull();
+    expect(detectObligationId("Follow up EPDS perinatal depression screen")).toBe("OBL-401");
+    expect(detectObligationId("Colposcopy for abnormal cervical cytology")).toBe("OBL-402");
+    expect(detectObligationId("Suspected endometriosis pelvic pain pathway")).toBe("OBL-501");
+    expect(detectObligationId("Routine wellness check")).toBeNull();
   });
 
-  it("computes urgency chips and trace execution labels", () => {
+  it("computes urgency chips, closure policy badges, and EPDS/GAD-7 clinical metrics", () => {
     const base = makeSeedObligations()[0];
     expect(getUrgentDueChip(base)).toBeNull();
     expect(
@@ -298,6 +303,30 @@ describe("PrototypeDemo pure helpers", () => {
         life_stage: "Postpartum",
       })
     ).toBe("Pre-discharge ≤ 48h");
+    expect(
+      getUrgentDueChip({
+        ...base,
+        status: "ESCALATED_FOR_REVIEW",
+        life_stage: "Postpartum",
+        due_label: "4–12 weeks postpartum 75g OGTT (ADA 2026)",
+      })
+    ).toBe("4–12 weeks postpartum 75g OGTT (ADA 2026)");
+
+    expect(formatClosurePolicyLabel("COMPLETED_TEST_NOT_BOOKING")).toContain("booking alone blocked");
+    expect(formatClosurePolicyLabel("ENDOMETRIOSIS_PATHWAY_REVIEW")).toContain("Normal scan cannot close");
+    expect(formatClosurePolicyLabel("MENTAL_HEALTH_ASSESSMENT")).toContain("score alone blocked");
+
+    const mhMetrics = extractClinicalMetrics({
+      ...base,
+      id: "OBL-401",
+      rule_version: "RB-PERINATAL-MH-v1.0.0",
+      title: "Positive Perinatal Depression & Anxiety Screen (EPDS 15 · GAD-7 12)",
+      rationale: "Validated screen positive.",
+    });
+    expect(mhMetrics.map((m) => m.label)).toEqual([
+      "EPDS Screen (Signal Only)",
+      "GAD-7 Anxiety Screen",
+    ]);
 
     expect(formatExecutionLabel("agentic").label).toBe("Agentic");
     expect(formatExecutionLabel("deterministic_fallback").label).toBe("Fallback");
@@ -764,6 +793,12 @@ describe("<PrototypeDemo /> component workflows", () => {
     });
     scrollSpy.mockRestore();
     expect(within(main).getByText("Antenatal (Trimester 1)")).toBeInTheDocument();
+    expect(
+      within(main).getByRole("button", { name: /^ReTrigger Pregnancy Transition$/i })
+    ).toBeInTheDocument();
+    expect(
+      within(main).getByRole("button", { name: /^Trigger Postpartum Transition$/i })
+    ).toBeInTheDocument();
     expect(within(main).getByText("ESCALATED_FOR_REVIEW")).toBeInTheDocument();
     expect(within(main).getByText("DEFERRED_TO_POSTPARTUM")).toBeInTheDocument();
     expect(within(main).getByText("Due ≤ 72h")).toBeInTheDocument();
@@ -892,9 +927,10 @@ describe("<PrototypeDemo /> component workflows", () => {
     const user = userEvent.setup();
     render(<PrototypeDemo onBackToTutorial={vi.fn()} />);
 
+    const cohortTotal = DEFAULT_PATIENT_COHORT.length;
     const cohortStrip = screen.getByRole("region", { name: /Population Cohort Switcher/i });
-    expect(within(cohortStrip).getByText("3 Patients")).toBeInTheDocument();
-    expect(within(cohortStrip).getByText("1/3")).toBeInTheDocument();
+    expect(await within(cohortStrip).findByText(`${cohortTotal} Patients`)).toBeInTheDocument();
+    expect(await within(cohortStrip).findByText(`1/${cohortTotal}`)).toBeInTheDocument();
 
     // Prev/Next stepper precedes the Switch patient button (left-anchored geometry)
     const nextBtn = within(cohortStrip).getByRole("button", { name: "Next patient" });
@@ -907,14 +943,14 @@ describe("<PrototypeDemo /> component workflows", () => {
     expect(within(cohortStrip).queryByText(/Endocrine & Rubella Continuity/i)).not.toBeInTheDocument();
     expect(within(cohortStrip).queryByText(/\(Synthetic\)/i)).not.toBeInTheDocument();
 
-    // Step forward to Fatima (2/3) and back to Amina (1/3)
+    // Step forward to Fatima (2/N) and back to Amina (1/N)
     await user.click(nextBtn);
-    expect(await within(cohortStrip).findByText("2/3")).toBeInTheDocument();
+    expect(await within(cohortStrip).findByText(`2/${cohortTotal}`)).toBeInTheDocument();
     const main = screen.getByRole("main");
     expect(await within(main).findByText(/Fatima Al-Zaabi \(Synthetic\)/)).toBeInTheDocument();
 
     await user.click(prevBtn);
-    expect(await within(cohortStrip).findByText("1/3")).toBeInTheDocument();
+    expect(await within(cohortStrip).findByText(`1/${cohortTotal}`)).toBeInTheDocument();
     expect(await within(main).findByText(/Amina Al-Mansoori \(Synthetic\)/)).toBeInTheDocument();
 
     // Open searchable/sortable Population Registry dialog

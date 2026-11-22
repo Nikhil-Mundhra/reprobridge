@@ -124,26 +124,34 @@ export default function CareFlowAndPatientHeader({
               <ArrowRight className="h-3 w-3 text-teal-600" aria-hidden="true" />
             </span>
           )}
-          {!isAntenatal && !isPostpartum && (
-            <button
-              onClick={() => onRunTransition("/api/transitions/pregnancy")}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-teal-700 disabled:opacity-50"
-            >
-              <Sparkles className="h-4 w-4" />
-              Trigger Pregnancy Transition
-            </button>
-          )}
-          {isAntenatal && (
-            <button
-              onClick={() => onRunTransition("/api/transitions/postpartum")}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-xs transition hover:bg-indigo-700 disabled:opacity-50"
-            >
-              <Baby className="h-4 w-4" />
-              Trigger Postpartum Transition
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => onRunTransition("/api/transitions/pregnancy")}
+            disabled={loading}
+            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium shadow-xs transition disabled:opacity-50 ${
+              isAntenatal || isPostpartum
+                ? "border border-teal-300 bg-teal-50 text-teal-900 hover:bg-teal-100"
+                : "bg-teal-600 text-white hover:bg-teal-700"
+            }`}
+          >
+            <Sparkles className="h-4 w-4" aria-hidden="true" />
+            {isAntenatal || isPostpartum
+              ? "ReTrigger Pregnancy Transition"
+              : "Trigger Pregnancy Transition"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onRunTransition("/api/transitions/postpartum")}
+            disabled={loading}
+            className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium shadow-xs transition disabled:opacity-50 ${
+              isAntenatal
+                ? "bg-indigo-600 text-white hover:bg-indigo-700"
+                : "border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100"
+            }`}
+          >
+            <Baby className="h-4 w-4" aria-hidden="true" />
+            Trigger Postpartum Transition
+          </button>
           {hasHarnessBrief && onScrollToHarness && (
             <button
               type="button"
