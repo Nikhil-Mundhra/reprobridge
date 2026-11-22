@@ -42,6 +42,16 @@ function getLifeStageBadgeStyle(lifeStage: string): string {
   return "border-sky-200 bg-sky-50 text-sky-800";
 }
 
+function getLifeStageButtonStyle(lifeStage: string): string {
+  if (lifeStage === "Postpartum") {
+    return "bg-indigo-600 hover:bg-indigo-700 text-white";
+  }
+  if (lifeStage.startsWith("Antenatal")) {
+    return "bg-amber-600 hover:bg-amber-700 text-white";
+  }
+  return "bg-sky-600 hover:bg-sky-700 text-white";
+}
+
 function getStageFilterStyle(stageOpt: StageFilter, active: boolean): string {
   if (stageOpt === "Preconception") {
     return active
@@ -472,7 +482,7 @@ export default function PatientSearchOnboarding({
       <main className="mx-auto max-w-5xl px-6 py-8">
         {step === "search" ? (
           <section aria-labelledby="patient-search-heading" className="space-y-6">
-            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-xs">
+            <div className="rounded-xl border border-slate-200 bg-white p-6 text-center shadow-xs">
               <p className="text-xs font-bold uppercase tracking-wider text-teal-700">
                 Malaffi HIE & Facility Registry · UAE Boundary
               </p>
@@ -482,19 +492,19 @@ export default function PatientSearchOnboarding({
               >
                 Search & Select Patient Record
               </h1>
-              <p className="mt-1.5 text-sm text-slate-600">
+              <p className="mx-auto mt-1.5 max-w-2xl text-sm text-slate-600">
                 Choose a patient record to launch an AI-streamed intake reconciliation check
                 (gestational dating, active medications, and HIE document alignment) before opening
                 the full Care Continuity Workbench.
               </p>
 
-              <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="relative flex-1">
+              <div className="mx-auto mt-5 flex w-full max-w-xl flex-col items-center gap-3">
+                <div className="relative w-full">
                   <label htmlFor={searchInputId} className="sr-only">
                     Search patients by name, MRN, track, or facility
                   </label>
                   <Search
-                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                    className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
                     aria-hidden="true"
                   />
                   <input
@@ -503,11 +513,15 @@ export default function PatientSearchOnboarding({
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search by patient name, MRN (e.g. PAT-AE-4092), clinical track, or facility..."
-                    className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20"
+                    className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-teal-500 focus:outline-hidden focus:ring-2 focus:ring-teal-500/20"
                   />
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by life stage">
+                <div
+                  className="flex flex-wrap items-center justify-center gap-2"
+                  role="group"
+                  aria-label="Filter by life stage"
+                >
                   {(["ALL", "Preconception", "Antenatal", "Postpartum"] as const).map(
                     (stageOpt) => {
                       const active = stageFilter === stageOpt;
@@ -605,7 +619,9 @@ export default function PatientSearchOnboarding({
                     <button
                       type="button"
                       onClick={() => void startQuestionnaireForPatient(p)}
-                      className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white shadow-2xs transition hover:bg-teal-700"
+                      className={`mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium shadow-2xs transition ${getLifeStageButtonStyle(
+                        p.life_stage
+                      )}`}
                     >
                       Select Patient & Reconcile
                       <ArrowRight className="h-4 w-4" aria-hidden="true" />
