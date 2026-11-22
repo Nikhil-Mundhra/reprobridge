@@ -705,7 +705,18 @@ describe("<PrototypeDemo /> component workflows", () => {
     expect(within(main).getByText("PAT-AE-4092")).toBeInTheDocument();
     expect(within(main).getByText("Preconception")).toBeInTheDocument();
     expect(screen.getByText("UAE Local · Live")).toBeInTheDocument();
-    expect(within(main).getByText("Clinical Obligation Passport (2)")).toBeInTheDocument();
+    const passportHeading = within(main).getByText("Clinical Obligation Passport (2)");
+    const spineHeading = within(main).getByText(
+      "Cross-System Care Continuity Spine (1 Patient · 3 Disconnected EMRs)"
+    );
+    const mubadalaCare = within(main).getByText("Mubadala Primary Care");
+    expect(
+      passportHeading.compareDocumentPosition(spineHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      passportHeading.compareDocumentPosition(mubadalaCare) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
     expect(
       within(main).getByText("Subclinical Hypothyroidism Follow-up (TSH 4.8 mIU/L)")
     ).toBeInTheDocument();
@@ -753,6 +764,25 @@ describe("<PrototypeDemo /> component workflows", () => {
     expect(
       within(main).getByText(/UAE Data Residency Firewall — Zero PHI Sent Outside UAE/i)
     ).toBeInTheDocument();
+
+    // Option B layout order: Patient/Value-Prop Header -> Obligation Passport -> Care-Site Spine -> Harness
+    const patientHeading = within(main).getByText(/Amina Al-Mansoori \(Synthetic\)/);
+    const passportHeading = within(main).getByText("Clinical Obligation Passport (2)");
+    const spineHeading = within(main).getByText(
+      "Cross-System Care Continuity Spine (1 Patient · 3 Disconnected EMRs)"
+    );
+    const harnessHeading = within(main).getByText(
+      "Hybrid Care-Resolution Harness (Deterministic Rules + OpenRouter Synthesis)"
+    );
+    expect(
+      patientHeading.compareDocumentPosition(passportHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      passportHeading.compareDocumentPosition(spineHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      spineHeading.compareDocumentPosition(harnessHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it("verifies clinician closure with incoming Neon evidence and blocks deferred MMR via HTTP 409 safety guard", async () => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ClinicalDocumentsDrawer from "./ClinicalDocumentsDrawer";
 import AuditGovernanceSection from "./demo/AuditGovernanceSection";
-import CareFlowAndPatientHeader from "./demo/CareFlowAndPatientHeader";
+import CareFlowAndPatientHeader, { CareSiteContinuitySpine } from "./demo/CareFlowAndPatientHeader";
 import DemoTopBar from "./demo/DemoTopBar";
 import FhirExportModal from "./demo/FhirExportModal";
 import FloatingDocsTab from "./demo/FloatingDocsTab";
@@ -590,6 +590,13 @@ export default function PrototypeDemo({ onBackToTutorial }: PrototypeDemoProps) 
             void handleExplainObligation(obl);
           }}
           explainingId={explainLoading ? explainTarget?.id ?? null : null}
+        />
+
+        <CareSiteContinuitySpine
+          patient={patient}
+          isAntenatal={isAntenatal}
+          isPostpartum={isPostpartum}
+          obligations={obligations}
         />
 
         <OrchestratorHarnessSection
