@@ -88,6 +88,8 @@ export function getUrgentDueChip(obl: Obligation): string | null {
 
 export function formatClosurePolicyLabel(policy?: string | null): string | null {
   switch ((policy ?? "").toUpperCase()) {
+    case "QUALIFYING_RESULT_IN_WINDOW":
+      return "Guard: Approval/order leaves task open · Dated qualifying result in window required";
     case "COMPLETED_TEST_NOT_BOOKING":
       return "Guard: Completed test required (booking alone blocked)";
     case "RESULT_REVIEW_SIGNOFF":

@@ -27,6 +27,7 @@ export default function VerifyClosureModal({
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
   const [clinicianName, setClinicianName] = useState(defaultClinicianName);
   const [closureEvidence, setClosureEvidence] = useState("");
+  const [evidenceDate, setEvidenceDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [showAddEvidenceForm, setShowAddEvidenceForm] = useState(false);
   const [newEvDisplay, setNewEvDisplay] = useState(target.title);
   const [newEvValue, setNewEvValue] = useState("");
@@ -58,6 +59,9 @@ export default function VerifyClosureModal({
             setSelectedEvidenceId(latest.id);
             setClinicianName(latest.clinician_suggestion || defaultClinicianName);
             setClosureEvidence(latest.summary_note);
+            if (latest.evidence_date) {
+              setEvidenceDate(latest.evidence_date.slice(0, 10));
+            }
           }
         }
       } finally {
@@ -119,6 +123,7 @@ export default function VerifyClosureModal({
           clinician_name: clinicianName,
           closure_evidence: closureEvidence,
           evidence_id: selectedEvidenceId,
+          evidence_date: evidenceDate || null,
         }),
       });
       if (!res.ok) {
@@ -310,18 +315,69 @@ export default function VerifyClosureModal({
               </div>
             </div>
           )}
-          <div>
-            <label className="block text-xs font-medium text-slate-700">
-              Authorized Clinician
-            </label>
-            <input
-              type="text"
-              required
-              value={clinicianName}
-              onChange={(e) => setClinicianName(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
-            />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="block text-xs font-medium text-slate-700">
+                Authorized Clinician
+              </label>
+              <input
+                type="text"
+                required
+                value={clinicianName}
+                onChange={(e) => setClinicianName(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700">
+                Evidence / Result Date
+              </label>
+              <input
+                type="date"
+                value={evidenceDate}
+                onChange={(e) => setEvidenceDate(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none"
+              />
+            </div>
           </div>
+
+          {target.closure_policy === "QUALIFYING_RESULT_IN_WINDOW" && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-xs">
+              <p className="font-medium text-slate-700">Quick Demo Evidence Presets:</p>
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGuardError(null);
+                    setSelectedEvidenceId(null);
+                    setClosureEvidence(
+                      "Clinician approved follow-up plan and test ordered (lab requisition placed; result pending)."
+                    );
+                    setEvidenceDate(new Date().toISOString().slice(0, 10));
+                  }}
+                  className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                >
+                  Test Order / Approval Only (Leaves Task Open)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGuardError(null);
+                    const firstEv = verifyEvidenceList[0];
+                    setSelectedEvidenceId(firstEv?.id ?? null);
+                    setClosureEvidence(
+                      firstEv?.summary_note ??
+                        "Repeat TSH 2.1 mIU/L verified (within Trimester 1 target <2.5 mIU/L); Free T4 15.2 pmol/L."
+                    );
+                    setEvidenceDate(new Date().toISOString().slice(0, 10));
+                  }}
+                  className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-900 hover:bg-emerald-100"
+                >
+                  Dated Qualifying TSH Result (Closes Task)
+                </button>
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-slate-700">

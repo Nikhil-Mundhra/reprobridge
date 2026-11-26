@@ -633,3 +633,209 @@ def test_five_evidence_clinical_gaps_end_to_end(monkeypatch):
     assert endo_closed.json()["obligation"]["status"] == "VERIFIED_CLOSED"
 
     client.post("/api/demo/reset")
+
+
+def test_healthx_live_demo_end_to_end(monkeypatch):
+    """End-to-end verification of the 90-second HealthX Ajyal Hackathon live demo script."""
+    from datetime import UTC, datetime
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = TestClient(app)
+    assert client.post("/api/demo/reset").status_code == 200
+
+    # Beat 1 (1:30–1:50): 2011 Hospital A note quote + unverified follow-up on Amira (age 31)
+    initial = client.get("/api/obligations", params={"patient_id": "PAT-AE-4092"}).json()
+    obl_101 = next(o for o in initial["obligations"] if o["id"] == "OBL-101")
+    assert obl_101["source_note_date"] == "2011-05-18"
+    assert "Hospital A" in obl_101["source_facility"]
+    assert obl_101["source_quote"]
+    assert obl_101["review_state"] == "UNVERIFIED_FROM_NOTE"
+    assert obl_101["closure_policy"] == "QUALIFYING_RESULT_IN_WINDOW"
+
+    # Beat 2 (1:50–2:15): Clinician confirms relevance & takes ownership -> 9 days remaining
+    confirmed = client.post(
+        "/api/obligations/OBL-101/review",
+        json={
+            "action": "confirm",
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "owner": "Dr. Layla Al-Hashimi · Hospital B OB-GYN",
+        },
+    )
+    assert confirmed.status_code == 200
+    conf_obl = confirmed.json()["obligation"]
+    assert conf_obl["review_state"] == "CONFIRMED_RELEVANT"
+    assert conf_obl["owner"] == "Dr. Layla Al-Hashimi · Hospital B OB-GYN"
+    assert conf_obl["days_remaining"] == 9
+    assert any(
+        ev["event_type"] == "CLINICIAN_CONFIRMED_RELEVANCE"
+        for ev in confirmed.json()["audit_events"]
+    )
+
+    # Server-side explanation field verification
+    explain = client.post("/api/obligations/OBL-101/explain")
+    assert explain.status_code == 200
+    fv = explain.json()["field_verification"]
+    assert fv["verified"] is True
+    assert "status" in fv["checked_fields"]
+    assert fv["authoritative_snapshot"]["days_remaining"] == 9
+
+    # Beat 3a (2:15–2:40): Approval / test order leaves task OPEN (HTTP 409)
+    order_blocked = client.post(
+        "/api/obligations/OBL-101/verify",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "closure_evidence": "Clinician approved plan and test ordered (lab requisition placed).",
+            "evidence_date": datetime.now(UTC).date().isoformat(),
+        },
+    )
+    assert order_blocked.status_code == 409
+    assert "leaves task open" in order_blocked.json()["detail"].lower()
+
+    # Beat 3b: Out-of-window historical 2011 result is also rejected (HTTP 409)
+    stale_blocked = client.post(
+        "/api/obligations/OBL-101/verify",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "closure_evidence": "Repeat TSH 2.1 mIU/L normalized.",
+            "evidence_date": "2011-05-18",
+        },
+    )
+    assert stale_blocked.status_code == 409
+    assert "out-of-window" in stale_blocked.json()["detail"].lower()
+
+    # Beat 3c: Dated, qualifying in-window result closes the task
+    closed = client.post(
+        "/api/obligations/OBL-101/verify",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "closure_evidence": "Repeat TSH 2.1 mIU/L verified (within Trimester 1 target <2.5 mIU/L).",
+            "evidence_id": "EVD-TSH-2026-10",
+            "evidence_date": datetime.now(UTC).date().isoformat(),
+        },
+    )
+    assert closed.status_code == 200
+    assert closed.json()["obligation"]["status"] == "VERIFIED_CLOSED"
+
+    # Beat 4 (2:40–3:00): Evidence correction automatically reopens task & logs audit history
+    reopened = client.post(
+        "/api/obligations/OBL-101/correct-evidence",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "correction_reason": "Lab amended: specimen hemolyzed — repeat in-window TSH required.",
+            "evidence_id": "EVD-TSH-2026-10",
+        },
+    )
+    assert reopened.status_code == 200
+    re_obl = reopened.json()["obligation"]
+    assert re_obl["status"] == "REOPENED"
+    assert re_obl["owner"] == "Dr. Layla Al-Hashimi · Hospital B OB-GYN"
+    assert "hemolyzed" in re_obl["reopened_reason"].lower()
+    assert re_obl["verified_by"] is None
+    assert any(
+        ev["event_type"] == "EVIDENCE_CORRECTED_REOPENED" for ev in reopened.json()["audit_events"]
+    )
+
+    # Dismissing a stale finding logs OBLIGATION_DISMISSED_STALE
+    dismissed = client.post(
+        "/api/obligations/OBL-102/review",
+        json={
+            "action": "dismiss",
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "reason": "Verified historic Rubella immunity documented in external registry.",
+        },
+    )
+    assert dismissed.status_code == 200
+    assert dismissed.json()["obligation"]["status"] == "DISMISSED_STALE"
+    assert any(
+        ev["event_type"] == "OBLIGATION_DISMISSED_STALE" for ev in dismissed.json()["audit_events"]
+    )
+
+    client.post("/api/demo/reset")
+
+
+def test_zero_sharing_cryptographic_passport_and_tamper_detection(monkeypatch):
+    """Verify patient-held SMART Health Link passports, offline verification, and tamper detection."""
+    from datetime import UTC, datetime
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    client = TestClient(app)
+    assert client.post("/api/demo/reset").status_code == 200
+
+    # 1. Issue patient-held passport for OBL-101 (zero raw EHR chart bytes, zero raw PHI)
+    issued = client.post(
+        "/api/obligations/OBL-101/passport",
+        json={"include_source_quote": True},
+    )
+    assert issued.status_code == 200
+    passport = issued.json()["passport"]
+    assert passport["zero_hospital_sharing"] is True
+    assert passport["credential_type"] == "ReproBridgeObligationPassport"
+    assert passport["claims"]["raw_chart_bytes_shared"] == 0
+    assert passport["claims"]["source_note_sha256"]
+    assert "Amira" not in json.dumps(passport)
+    assert "PAT-AE-4092" not in json.dumps(passport)
+    assert any(
+        ev["event_type"] == "ZERO_SHARING_PASSPORT_ISSUED" for ev in issued.json()["audit_events"]
+    )
+
+    # 2. Hospital B verifies signature offline with 0 Hospital A API calls
+    verified = client.post("/api/passport/verify", json={"passport": passport})
+    assert verified.status_code == 200
+    vj = verified.json()
+    assert vj["valid"] is True
+    assert vj["tampered"] is False
+    assert vj["hospital_a_api_calls"] == 0
+    assert vj["raw_chart_exposed"] is False
+
+    # 3. Tampering with any claim invalidates the HMAC-SHA256 signature immediately
+    tampered_passport = {
+        **passport,
+        "claims": {**passport["claims"], "status": "VERIFIED_CLOSED"},
+    }
+    tamper_check = client.post("/api/passport/verify", json={"passport": tampered_passport})
+    assert tamper_check.status_code == 200
+    tj = tamper_check.json()
+    assert tj["valid"] is False
+    assert tj["tampered"] is True
+    assert "tamper detected" in tj["detail"].lower()
+
+    # 4. After clinician closure, passport becomes a signed Proof-of-Closure Attestation
+    closed = client.post(
+        "/api/obligations/OBL-101/verify",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "closure_evidence": (
+                "Repeat TSH 2.1 mIU/L verified (within Trimester 1 target <2.5 mIU/L)."
+            ),
+            "evidence_date": datetime.now(UTC).date().isoformat(),
+        },
+    )
+    assert closed.status_code == 200
+    closure_passport = client.post("/api/obligations/OBL-101/passport").json()["passport"]
+    assert closure_passport["credential_type"] == "ReproBridgeClosureAttestation"
+    assert (
+        client.post("/api/passport/verify", json={"passport": closure_passport}).json()["valid"]
+        is True
+    )
+
+    # 5. After evidence correction, passport becomes a signed Proof-of-Reopen Attestation
+    reopened = client.post(
+        "/api/obligations/OBL-101/correct-evidence",
+        json={
+            "clinician_name": "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+            "correction_reason": "Lab amended: specimen hemolyzed — repeat TSH required.",
+        },
+    )
+    assert reopened.status_code == 200
+    reopen_passport = client.post("/api/obligations/OBL-101/passport").json()["passport"]
+    assert reopen_passport["credential_type"] == "ReproBridgeReopenAttestation"
+    assert (
+        client.post("/api/passport/verify", json={"passport": reopen_passport}).json()["valid"]
+        is True
+    )
+
+    client.post("/api/demo/reset")

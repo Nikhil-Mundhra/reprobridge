@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import Iterator
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Response
@@ -21,6 +21,7 @@ from api.db import (
     list_patient_summaries,
     query_patients,
     reset_obligations,
+    update_evidence_record,
     update_obligation,
 )
 from api.mcp_server import call_mcp_tool, handle_mcp_jsonrpc, list_mcp_tools
@@ -37,17 +38,23 @@ from api.openrouter import (
 from api.privacy import (
     build_obligation_explain_payload,
     build_reconciliation_questionnaire_payload,
+    issue_obligation_passport,
     scrub_explanation_for_tts,
+    verify_obligation_passport,
 )
 from api.workflow import (
     TransitionState,
     apply_uae_privacy_firewall,
     build_followup_child_obligation,
+    calculate_confirmed_due_window,
+    compute_days_remaining,
     detect_open_obligations,
+    evaluate_evidence_correction,
     evaluate_incoming_evidence_safety,
     evaluate_life_stage_transition,
     transition_workflow,
     validate_closure_policy,
+    verify_explanation_fields,
 )
 
 app = FastAPI(
@@ -68,6 +75,29 @@ class VerifyClosureRequest(BaseModel):
     clinician_name: str = Field(..., min_length=2, max_length=128)
     closure_evidence: str = Field(..., min_length=4, max_length=1000)
     evidence_id: str | None = Field(default=None, max_length=64)
+    evidence_date: str | None = Field(default=None, max_length=32)
+
+
+class ReviewObligationRequest(BaseModel):
+    action: Literal["confirm", "dismiss"]
+    clinician_name: str = Field(..., min_length=2, max_length=128)
+    owner: str | None = Field(default=None, max_length=128)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class CorrectEvidenceRequest(BaseModel):
+    clinician_name: str = Field(..., min_length=2, max_length=128)
+    correction_reason: str = Field(..., min_length=4, max_length=1000)
+    evidence_id: str | None = Field(default=None, max_length=64)
+    amended_result_value: str | None = Field(default=None, max_length=256)
+
+
+class IssuePassportRequest(BaseModel):
+    include_source_quote: bool = True
+
+
+class VerifyPassportRequest(BaseModel):
+    passport: dict[str, Any]
 
 
 class ExplainAudioRequest(BaseModel):
@@ -115,6 +145,7 @@ class EvidenceIntakeRequest(BaseModel):
     accession_id: str | None = Field(default=None, max_length=128)
     clinician_suggestion: str = Field(default="Dr. Layla Al-Hashimi (OB-GYN)", max_length=128)
     summary_note: str | None = Field(default=None, max_length=1000)
+    evidence_date: str | None = Field(default=None, max_length=32)
 
 
 class TransitionEventRequest(BaseModel):
@@ -123,6 +154,14 @@ class TransitionEventRequest(BaseModel):
     discharge_diagnoses: list[str] = Field(default_factory=list, max_length=12)
     bp_reading: dict[str, int] | str | None = None
     screening_signal: dict[str, Any] | None = None
+
+
+def _enrich_obligation(obl: dict[str, Any]) -> dict[str, Any]:
+    return {**obl, "days_remaining": compute_days_remaining(obl)}
+
+
+def _enrich_obligations(obligations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_enrich_obligation(o) for o in obligations]
 
 
 def _filter_audit_events(
@@ -216,7 +255,7 @@ def _run_transition(
         },
     )
 
-    updated_obls = list_obligations(patient_id=patient_id)
+    updated_obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     return {
         "patient_id": patient_id,
         "event_type": event_type,
@@ -271,7 +310,7 @@ def _stream_transition_events(
         state.get("spawned_obligations") or [],
     )
 
-    mid_obls = list_obligations(patient_id=patient_id)
+    mid_obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     yield _sse(
         "deterministic_complete",
         {
@@ -344,7 +383,7 @@ def _stream_transition_events(
         },
     )
 
-    final_obls = list_obligations(patient_id=patient_id)
+    final_obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     yield _sse(
         "complete",
         {
@@ -408,7 +447,7 @@ def get_patients(
 
 @app.get("/api/obligations")
 def get_obligations(patient_id: str = "PAT-AE-4092"):
-    obls = list_obligations(patient_id=patient_id)
+    obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     return {
         "patient_id": patient_id,
         "obligations": obls,
@@ -495,7 +534,7 @@ def import_obligations(body: ObligationImportRequest):
                     ),
                 }
             )
-    obls_for_pid = list_obligations(patient_id=target_pid)
+    obls_for_pid = _enrich_obligations(list_obligations(patient_id=target_pid))
     return {
         "patient_id": target_pid,
         "imported_count": len(created),
@@ -540,6 +579,7 @@ def add_obligation_evidence(obligation_id: str, body: EvidenceIntakeRequest):
             "accession_id": body.accession_id,
             "clinician_suggestion": body.clinician_suggestion.strip(),
             "summary_note": summary_note,
+            "evidence_date": body.evidence_date,
         }
     )
     append_audit_event(
@@ -614,6 +654,72 @@ def stream_postpartum_transition(
     )
 
 
+@app.post("/api/obligations/{obligation_id}/review")
+def review_obligation(obligation_id: str, body: ReviewObligationRequest):
+    """Clinician confirms present relevance & takes ownership, or dismisses a stale finding."""
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+
+    clinician = body.clinician_name.strip()
+    if body.action == "dismiss":
+        reason = (body.reason or "").strip()
+        if len(reason) < 4:
+            raise HTTPException(
+                status_code=422,
+                detail="Provide a brief clinical reason when dismissing a stale finding.",
+            )
+        updated = update_obligation(
+            obligation_id,
+            {
+                "status": "DISMISSED_STALE",
+                "review_state": "DISMISSED",
+                "dismissed_by": clinician,
+                "dismissed_reason": reason,
+            },
+        )
+        append_audit_event(
+            event_type="OBLIGATION_DISMISSED_STALE",
+            actor=clinician,
+            summary=f"Dismissed {obligation_id} as stale/not applicable: {reason}",
+            obligation_id=obligation_id,
+        )
+    else:
+        assigned_owner = (body.owner or "").strip() or clinician
+        window_patch = calculate_confirmed_due_window(existing)
+        updated = update_obligation(
+            obligation_id,
+            {
+                "review_state": "CONFIRMED_RELEVANT",
+                "relevance_confirmed_by": clinician,
+                "owner": assigned_owner,
+                **window_patch,
+            },
+        )
+        append_audit_event(
+            event_type="CLINICIAN_CONFIRMED_RELEVANCE",
+            actor=clinician,
+            summary=(
+                f"Confirmed present relevance of {obligation_id} and assigned owner "
+                f"'{assigned_owner}' ({window_patch['due_label']}; window "
+                f"{window_patch['due_window_start']} to {window_patch['due_window_end']})."
+            ),
+            obligation_id=obligation_id,
+        )
+
+    patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
+    obls = _enrich_obligations(list_obligations(patient_id=patient_id))
+    return {
+        "obligation": _enrich_obligation(updated) if updated else None,
+        "obligations": obls,
+        "audit_events": _filter_audit_events(obls, patient_id),
+        "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
+    }
+
+
 @app.post("/api/obligations/{obligation_id}/verify")
 def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
     existing = next(
@@ -622,7 +728,11 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
     if existing is None:
         raise HTTPException(status_code=404, detail="Clinical obligation not found")
 
-    guard = validate_closure_policy(existing, body.closure_evidence)
+    guard = validate_closure_policy(
+        existing,
+        body.closure_evidence,
+        evidence_date=body.evidence_date,
+    )
     if not guard.allowed:
         rule_ver = str(existing.get("rule_version") or "RB-SAFETY-v1.0.0")
         if guard.escalation_patch:
@@ -647,13 +757,19 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
             "status": "VERIFIED_CLOSED",
             "verified_by": body.clinician_name,
             "closure_evidence": body.closure_evidence,
+            "reopened_by": None,
+            "reopened_reason": None,
         },
     )
     evidence_ref = f" [Evidence ID: {body.evidence_id}]" if body.evidence_id else ""
+    date_ref = f" [Date: {body.evidence_date}]" if body.evidence_date else ""
     append_audit_event(
         event_type="EVIDENCE_VERIFIED_CLOSURE",
         actor=body.clinician_name,
-        summary=f"Closed {obligation_id} with verified evidence{evidence_ref}: {body.closure_evidence}",
+        summary=(
+            f"Closed {obligation_id} with verified evidence{evidence_ref}{date_ref}: "
+            f"{body.closure_evidence}"
+        ),
         obligation_id=obligation_id,
     )
     patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
@@ -672,15 +788,102 @@ def verify_obligation_closure(obligation_id: str, body: VerifyClosureRequest):
             obligation_id=spawned_obligation["id"],
         )
 
-    obls = list_obligations(patient_id=patient_id)
+    obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     return {
-        "obligation": updated,
-        "spawned_obligation": spawned_obligation,
+        "obligation": _enrich_obligation(updated) if updated else None,
+        "spawned_obligation": _enrich_obligation(spawned_obligation)
+        if spawned_obligation
+        else None,
         "obligations": obls,
         "audit_events": _filter_audit_events(obls, patient_id),
         "patients": list_patient_summaries(),
         "cohort_totals": query_patients(limit=1)["cohort_totals"],
     }
+
+
+@app.post("/api/obligations/{obligation_id}/correct-evidence")
+def correct_obligation_evidence(obligation_id: str, body: CorrectEvidenceRequest):
+    """Correct or amend closing evidence and deterministically reopen the obligation."""
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+    if existing.get("status") != "VERIFIED_CLOSED":
+        raise HTTPException(
+            status_code=409,
+            detail="Only VERIFIED_CLOSED obligations can be reopened via evidence correction.",
+        )
+
+    if body.evidence_id:
+        ev_patch: dict[str, Any] = {"status": "CORRECTED"}
+        if body.amended_result_value and body.amended_result_value.strip():
+            ev_patch["result_value"] = f"[AMENDED] {body.amended_result_value.strip()}"
+        update_evidence_record(body.evidence_id, ev_patch)
+
+    reopen_patch = evaluate_evidence_correction(
+        existing,
+        correction_reason=body.correction_reason,
+        clinician_name=body.clinician_name,
+    )
+    updated = update_obligation(obligation_id, reopen_patch)
+    owner_label = str((updated or existing).get("owner") or "Unassigned")
+    append_audit_event(
+        event_type="EVIDENCE_CORRECTED_REOPENED",
+        actor=body.clinician_name.strip(),
+        summary=(
+            f"Corrected evidence for {obligation_id} and automatically reopened task "
+            f"(Owner: {owner_label}): {body.correction_reason.strip()}"
+        ),
+        obligation_id=obligation_id,
+    )
+    patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
+    obls = _enrich_obligations(list_obligations(patient_id=patient_id))
+    return {
+        "obligation": _enrich_obligation(updated) if updated else None,
+        "obligations": obls,
+        "audit_events": _filter_audit_events(obls, patient_id),
+        "patients": list_patient_summaries(),
+        "cohort_totals": query_patients(limit=1)["cohort_totals"],
+    }
+
+
+@app.post("/api/obligations/{obligation_id}/passport")
+def issue_patient_passport(
+    obligation_id: str,
+    body: Annotated[IssuePassportRequest | None, Body()] = None,
+):
+    """Issue a patient-held, cryptographically signed Obligation Passport (zero hospital sharing)."""
+    existing = next(
+        (o for o in list_obligations(patient_id="ALL") if o["id"] == obligation_id), None
+    )
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Clinical obligation not found")
+
+    enriched = _enrich_obligation(existing)
+    include_quote = body.include_source_quote if body is not None else True
+    passport = issue_obligation_passport(enriched, include_source_quote=include_quote)
+    append_audit_event(
+        event_type="ZERO_SHARING_PASSPORT_ISSUED",
+        actor=passport["issuer"],
+        summary=(
+            f"Issued patient-held {passport['credential_type']} for {obligation_id} "
+            f"(0 raw EHR bytes shared; note hash {passport['claims']['source_note_sha256'][:12]}…)."
+        ),
+        obligation_id=obligation_id,
+    )
+    patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
+    obls = _enrich_obligations(list_obligations(patient_id=patient_id))
+    return {
+        "passport": passport,
+        "audit_events": _filter_audit_events(obls, patient_id),
+    }
+
+
+@app.post("/api/passport/verify")
+def verify_patient_passport(body: VerifyPassportRequest):
+    """Verify a patient-held Obligation Passport offline with zero Hospital A API calls."""
+    return verify_obligation_passport(body.passport)
 
 
 @app.post("/api/obligations/{obligation_id}/explain")
@@ -691,17 +894,23 @@ def explain_obligation(obligation_id: str):
     if existing is None:
         raise HTTPException(status_code=404, detail="Clinical obligation not found")
 
-    privacy_report = build_obligation_explain_payload(existing)
+    enriched_existing = _enrich_obligation(existing)
+    privacy_report = build_obligation_explain_payload(enriched_existing)
     result = explain_deidentified_obligation(privacy_report["payload"])
+    field_verification = verify_explanation_fields(enriched_existing, result)
 
     append_audit_event(
         event_type="AI_EXPLANATION_GENERATED",
         actor=f"AIExplainer ({result['ai_metadata']['model']})",
-        summary=f"Generated de-identified explanation for {obligation_id} (0 PHI transmitted).",
+        summary=(
+            f"Generated de-identified explanation for {obligation_id} "
+            f"(0 PHI transmitted · Server field check: "
+            f"{'VERIFIED' if field_verification['verified'] else 'FLAGGED'})."
+        ),
         obligation_id=obligation_id,
     )
     patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
-    obls = list_obligations(patient_id=patient_id)
+    obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     return {
         "obligation_id": obligation_id,
         "headline": result["headline"],
@@ -710,6 +919,7 @@ def explain_obligation(obligation_id: str):
         "disclaimer": result["disclaimer"],
         "ai_metadata": result["ai_metadata"],
         "privacy_report": privacy_report,
+        "field_verification": field_verification,
         "audit_events": _filter_audit_events(obls, patient_id),
     }
 
@@ -717,7 +927,8 @@ def explain_obligation(obligation_id: str):
 def _stream_obligation_explanation(existing: dict[str, Any]) -> Iterator[str]:
     """Verify UAE Privacy Firewall first, then stream OpenRouter explanation tokens."""
     obligation_id = str(existing["id"])
-    privacy_report = build_obligation_explain_payload(existing)
+    enriched_existing = _enrich_obligation(existing)
+    privacy_report = build_obligation_explain_payload(enriched_existing)
     yield _sse(
         "firewall_verified",
         {
@@ -736,14 +947,20 @@ def _stream_obligation_explanation(existing: dict[str, Any]) -> Iterator[str]:
     if result is None:
         result = explain_deidentified_obligation(privacy_report["payload"])
 
+    field_verification = verify_explanation_fields(enriched_existing, result)
+
     append_audit_event(
         event_type="AI_EXPLANATION_GENERATED",
         actor=f"AIExplainer ({result['ai_metadata']['model']})",
-        summary=f"Generated de-identified explanation for {obligation_id} (0 PHI transmitted).",
+        summary=(
+            f"Generated de-identified explanation for {obligation_id} "
+            f"(0 PHI transmitted · Server field check: "
+            f"{'VERIFIED' if field_verification['verified'] else 'FLAGGED'})."
+        ),
         obligation_id=obligation_id,
     )
     patient_id = str(existing.get("patient_id") or "PAT-AE-4092")
-    obls = list_obligations(patient_id=patient_id)
+    obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     yield _sse(
         "complete",
         {
@@ -754,6 +971,7 @@ def _stream_obligation_explanation(existing: dict[str, Any]) -> Iterator[str]:
             "disclaimer": result["disclaimer"],
             "ai_metadata": result["ai_metadata"],
             "privacy_report": privacy_report,
+            "field_verification": field_verification,
             "audit_events": _filter_audit_events(obls, patient_id),
         },
     )
@@ -827,7 +1045,9 @@ def mcp_jsonrpc(payload: dict[str, Any]):
 
 @app.post("/api/demo/reset")
 def reset_demo(patient_id: str = "PAT-AE-4092"):
-    return reset_obligations(patient_id=patient_id)
+    data = reset_obligations(patient_id=patient_id)
+    data["obligations"] = _enrich_obligations(data.get("obligations", []))
+    return data
 
 
 def _infer_reconciled_life_stage(
@@ -966,7 +1186,7 @@ def submit_patient_reconciliation(patient_id: str, body: ReconcileSubmitRequest)
         obligation_id=primary_obl_id,
     )
 
-    updated_obls = list_obligations(patient_id=patient_id)
+    updated_obls = _enrich_obligations(list_obligations(patient_id=patient_id))
     if transition_result is not None:
         transition_result = {
             **transition_result,

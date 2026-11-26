@@ -163,3 +163,34 @@ def test_exact_dates_and_mental_health_notes_stay_local_only():
         assert_phi_free({"mental_health_notes": "Should never cross boundary"})
     with pytest.raises(PrivacyViolationError):
         assert_phi_free({"trigger_event_date": "2026-10-01"})
+
+
+def test_source_quote_and_review_fields_stay_local_only():
+    obl = {
+        **SEED_OBLIGATIONS[0],
+        "source_quote": "Verbatim 2011 Hospital A note quote for Amira.",
+        "source_note_date": "2011-05-18",
+        "source_facility": "Hospital A · Al Ain Adolescent Clinic",
+        "relevance_confirmed_by": "Dr. Layla Al-Hashimi",
+        "dismissed_by": "Dr. Samira Al-Hashemi",
+        "dismissed_reason": "Superseded by newer specialist note.",
+        "reopened_by": "Dr. Layla Al-Hashimi",
+        "reopened_reason": "Lab amended specimen hemolyzed.",
+        "days_remaining": 9,
+    }
+    deid = deidentify_obligation(obl)
+    assert deid["days_remaining"] == 9
+    assert deid["review_state"] == "UNVERIFIED_FROM_NOTE"
+    for forbidden_key in (
+        "source_quote",
+        "source_note_date",
+        "source_facility",
+        "relevance_confirmed_by",
+        "dismissed_by",
+        "dismissed_reason",
+        "reopened_by",
+        "reopened_reason",
+    ):
+        assert forbidden_key not in deid
+        with pytest.raises(PrivacyViolationError):
+            assert_phi_free({forbidden_key: "must not leak"})

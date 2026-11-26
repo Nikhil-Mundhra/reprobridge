@@ -1,5 +1,5 @@
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dotenv import load_dotenv
@@ -49,6 +49,16 @@ obligations_table = Table(
     Column("due_label", String(128), nullable=True),
     Column("closure_policy", String(64), nullable=True),
     Column("protocol_code", String(64), nullable=True),
+    Column("source_quote", Text, nullable=True),
+    Column("source_note_date", String(32), nullable=True),
+    Column("source_facility", String(256), nullable=True),
+    Column("source_doc_id", String(64), nullable=True),
+    Column("review_state", String(32), nullable=True),
+    Column("relevance_confirmed_by", String(128), nullable=True),
+    Column("dismissed_by", String(128), nullable=True),
+    Column("dismissed_reason", Text, nullable=True),
+    Column("reopened_by", String(128), nullable=True),
+    Column("reopened_reason", Text, nullable=True),
     Column("verified_by", String(128), nullable=True),
     Column("closure_evidence", Text, nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -62,6 +72,16 @@ _OBLIGATION_OPTIONAL_DEFAULTS: dict[str, Any] = {
     "due_label": None,
     "closure_policy": "CLINICIAN_EVIDENCE",
     "protocol_code": None,
+    "source_quote": None,
+    "source_note_date": None,
+    "source_facility": None,
+    "source_doc_id": None,
+    "review_state": "CONFIRMED_RELEVANT",
+    "relevance_confirmed_by": None,
+    "dismissed_by": None,
+    "dismissed_reason": None,
+    "reopened_by": None,
+    "reopened_reason": None,
 }
 
 _OBLIGATION_MIGRATION_DDL: tuple[str, ...] = (
@@ -72,6 +92,18 @@ _OBLIGATION_MIGRATION_DDL: tuple[str, ...] = (
     "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS due_label VARCHAR(128)",
     "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS closure_policy VARCHAR(64)",
     "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS protocol_code VARCHAR(64)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS source_quote TEXT",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS source_note_date VARCHAR(32)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS source_facility VARCHAR(256)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS source_doc_id VARCHAR(64)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS review_state VARCHAR(32)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS relevance_confirmed_by VARCHAR(128)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS dismissed_by VARCHAR(128)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS dismissed_reason TEXT",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS reopened_by VARCHAR(128)",
+    "ALTER TABLE clinical_obligations ADD COLUMN IF NOT EXISTS reopened_reason TEXT",
+    "ALTER TABLE clinical_evidence ADD COLUMN IF NOT EXISTS evidence_date VARCHAR(32)",
+    "ALTER TABLE clinical_evidence ADD COLUMN IF NOT EXISTS status VARCHAR(32)",
 )
 
 audit_events_table = Table(
@@ -98,8 +130,15 @@ clinical_evidence_table = Table(
     Column("accession_id", String(128), nullable=False),
     Column("clinician_suggestion", String(128), nullable=False),
     Column("summary_note", Text, nullable=False),
+    Column("evidence_date", String(32), nullable=True),
+    Column("status", String(32), nullable=True),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
 )
+
+_EVIDENCE_OPTIONAL_DEFAULTS: dict[str, Any] = {
+    "evidence_date": None,
+    "status": "ACTIVE",
+}
 
 
 def _normalize_database_url(raw_url: str) -> str:
@@ -145,14 +184,18 @@ def get_direct_engine() -> Engine | None:
     )
 
 
+def _iso_today_offset(days: int = 0) -> str:
+    return (datetime.now(UTC).date() + timedelta(days=days)).isoformat()
+
+
 PATIENT_COHORT_META: dict[str, dict[str, Any]] = {
     "PAT-AE-4092": {
         "patient_id": "PAT-AE-4092",
         "patient_name": "Amira Al-Mansoori (Synthetic)",
-        "age_sex": "32Y · F · G2P0+1",
-        "clinical_track": "Hashimoto's (Age 16) → Prior Miscarriage (Age 31) → Pregnant Again",
-        "facility_a": "Mubadala Primary Care",
-        "facility_b": "Corniche OB-GYN",
+        "age_sex": "31Y · F · G1P0",
+        "clinical_track": "Hashimoto's (Age 16, 2011 Note) → Pregnancy Intake (Age 31, 2026)",
+        "facility_a": "Hospital A · Al Ain Adolescent Clinic (2011)",
+        "facility_b": "Hospital B · Corniche OB-GYN (2026)",
         "id_base": 100,
     },
     "PAT-AE-5180": {
@@ -199,26 +242,41 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "patient_id": "PAT-AE-4092",
         "patient_name": "Amira Al-Mansoori (Synthetic)",
         "life_stage": "Antenatal (Trimester 1)",
-        "title": "Hashimoto's Hypothyroidism Follow-up (TSH 4.8 mIU/L · Prior Miscarriage at 31)",
+        "title": "Hashimoto's Hypothyroidism Follow-up (2011 Age-16 Note · TSH 4.8 mIU/L)",
         "rationale": (
-            "Diagnosed with Hashimoto's autoimmune hypothyroidism at age 16 and lost to follow-up "
-            "across disconnected clinics; unmanaged maternal hypothyroidism caused an early miscarriage "
-            "at age 31 (9w). Now age 32 and pregnant again (Trimester 1, G2P0+1) with elevated TSH "
-            "(4.8 mIU/L vs <2.5 mIU/L T1 target). Requires urgent repeat TSH + free T4 and OB-GYN / "
-            "endocrinology review to prevent recurrent pregnancy loss."
+            "At her first pregnancy visit at Hospital B in 2026 (age 31), ReproBridge surfaced an "
+            "unverified follow-up recommendation from a 2011 Hospital A note written when Amira was "
+            "16 (Anti-TPO 184 IU/mL, TSH 6.40 mIU/L). Current intake TSH is 4.8 mIU/L vs <2.5 mIU/L "
+            "Trimester 1 target. Clinician must confirm present relevance and assign an owner; a "
+            "test order or approval leaves this task open until a dated, qualifying TSH result "
+            "within the required window is verified."
         ),
-        "evidence_source": "FHIR Observation/obs-tsh-2026-09 (Malaffi HIE Synthetic)",
+        "evidence_source": "FHIR DocumentReference/note-2011-hosp-a (Hospital A · Age 16)",
         "rule_version": "RB-THYROID-v1.4.0",
-        "owner": "Primary Care / OB-GYN",
+        "owner": "Unassigned — Pending Clinician Review",
         "status": "OPEN",
         "priority": "HIGH",
         "parent_obligation_id": None,
-        "trigger_event_date": "2026-09-14",
+        "trigger_event_date": "2011-05-18",
         "due_window_start": None,
         "due_window_end": None,
-        "due_label": "Due ≤ 72h (T1 TSH <2.5 mIU/L · Prior loss at 31)",
-        "closure_policy": "CLINICIAN_EVIDENCE",
+        "due_label": "Pending clinician relevance confirmation",
+        "closure_policy": "QUALIFYING_RESULT_IN_WINDOW",
         "protocol_code": "ATA-THYROID-T1",
+        "source_quote": (
+            "Autoimmune Hashimoto's thyroiditis confirmed at age 16 (Anti-TPO 184 IU/mL, "
+            "TSH 6.40 mIU/L). Recommend repeat TSH and Free T4 with endocrine reassessment "
+            "upon any future pregnancy."
+        ),
+        "source_note_date": "2011-05-18",
+        "source_facility": "Hospital A · Al Ain Adolescent Clinic",
+        "source_doc_id": "DOC-HIST-16",
+        "review_state": "UNVERIFIED_FROM_NOTE",
+        "relevance_confirmed_by": None,
+        "dismissed_by": None,
+        "dismissed_reason": None,
+        "reopened_by": None,
+        "reopened_reason": None,
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -229,9 +287,9 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "life_stage": "Antenatal (Trimester 1)",
         "title": "Rubella IgG Non-Immune Vaccination Verification",
         "rationale": (
-            "Serology indicated Rubella IgG non-immune status (<5 IU/mL). Now age 32 and pregnant "
-            "again (G2P0+1); live MMR vaccination is contraindicated during pregnancy and must be "
-            "locked for postpartum pre-discharge administration."
+            "Serology indicated Rubella IgG non-immune status (<5 IU/mL). Now age 31 and pregnant "
+            "at Hospital B (2026); live MMR vaccination is contraindicated during pregnancy and must "
+            "be locked for postpartum pre-discharge administration."
         ),
         "evidence_source": "FHIR DiagnosticReport/rep-rubella-2026-08",
         "rule_version": "RB-IMMUNE-v1.2.1",
@@ -245,6 +303,7 @@ SEED_OBLIGATIONS: list[dict[str, Any]] = [
         "due_label": None,
         "closure_policy": "CLINICIAN_EVIDENCE",
         "protocol_code": "DOH-IMMUNE-MMR",
+        "review_state": "CONFIRMED_RELEVANT",
         "verified_by": None,
         "closure_evidence": None,
     },
@@ -646,14 +705,21 @@ SEED_CLINICAL_EVIDENCE: list[dict[str, Any]] = [
 ]
 
 _MEMORY_STORE: list[dict[str, Any]] = [
-    {**item, "updated_at": datetime.now(UTC)} for item in ALL_SEED_OBLIGATIONS
+    {**_OBLIGATION_OPTIONAL_DEFAULTS, **item, "updated_at": datetime.now(UTC)}
+    for item in ALL_SEED_OBLIGATIONS
 ]
 _MEMORY_AUDIT: list[dict[str, Any]] = [
     {"id": idx + 1, **item, "created_at": datetime.now(UTC)}
     for idx, item in enumerate(SEED_AUDIT_EVENTS)
 ]
 _MEMORY_EVIDENCE: list[dict[str, Any]] = [
-    {**item, "recorded_at": datetime.now(UTC)} for item in SEED_CLINICAL_EVIDENCE
+    {
+        **_EVIDENCE_OPTIONAL_DEFAULTS,
+        **item,
+        "evidence_date": item.get("evidence_date") or _iso_today_offset(0),
+        "recorded_at": datetime.now(UTC),
+    }
+    for item in SEED_CLINICAL_EVIDENCE
 ]
 
 
@@ -697,7 +763,12 @@ def ensure_schema_and_seed() -> None:
             row[0] for row in conn.execute(select(clinical_evidence_table.c.id)).all()
         }
         missing_ev = [
-            {**item, "recorded_at": now}
+            {
+                **_EVIDENCE_OPTIONAL_DEFAULTS,
+                **item,
+                "evidence_date": item.get("evidence_date") or _iso_today_offset(0),
+                "recorded_at": now,
+            }
             for item in SEED_CLINICAL_EVIDENCE
             if item["id"] not in existing_ev_ids
         ]
@@ -806,12 +877,14 @@ def list_patient_summaries() -> list[dict[str, Any]]:
                 open_count=sum(
                     1
                     for r in rows
-                    if r.get("status") not in {"VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM"}
+                    if r.get("status")
+                    not in {"VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM", "DISMISSED_STALE"}
                 ),
                 urgent_count=sum(
                     1
                     for r in rows
-                    if r.get("priority") == "URGENT" and r.get("status") != "VERIFIED_CLOSED"
+                    if r.get("priority") == "URGENT"
+                    and r.get("status") not in {"VERIFIED_CLOSED", "DISMISSED_STALE"}
                 ),
                 deferred_count=sum(1 for r in rows if r.get("status") == "DEFERRED_TO_POSTPARTUM"),
                 closed_count=sum(1 for r in rows if r.get("status") == "VERIFIED_CLOSED"),
@@ -826,7 +899,7 @@ def list_patient_summaries() -> list[dict[str, Any]]:
                 case(
                     (
                         obligations_table.c.status.notin_(
-                            ["VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM"]
+                            ["VERIFIED_CLOSED", "DEFERRED_TO_POSTPARTUM", "DISMISSED_STALE"]
                         ),
                         1,
                     ),
@@ -837,7 +910,11 @@ def list_patient_summaries() -> list[dict[str, Any]]:
                 case(
                     (
                         (obligations_table.c.priority == "URGENT")
-                        & (obligations_table.c.status != "VERIFIED_CLOSED"),
+                        & (
+                            obligations_table.c.status.notin_(
+                                ["VERIFIED_CLOSED", "DISMISSED_STALE"]
+                            )
+                        ),
                         1,
                     ),
                     else_=0,
@@ -1122,6 +1199,16 @@ def create_obligation(item: dict[str, Any]) -> dict[str, Any]:
         "due_label": item.get("due_label"),
         "closure_policy": item.get("closure_policy") or "CLINICIAN_EVIDENCE",
         "protocol_code": item.get("protocol_code"),
+        "source_quote": item.get("source_quote"),
+        "source_note_date": item.get("source_note_date"),
+        "source_facility": item.get("source_facility"),
+        "source_doc_id": item.get("source_doc_id"),
+        "review_state": item.get("review_state") or "CONFIRMED_RELEVANT",
+        "relevance_confirmed_by": item.get("relevance_confirmed_by"),
+        "dismissed_by": item.get("dismissed_by"),
+        "dismissed_reason": item.get("dismissed_reason"),
+        "reopened_by": item.get("reopened_by"),
+        "reopened_reason": item.get("reopened_reason"),
         "verified_by": None,
         "closure_evidence": None,
         "updated_at": now,
@@ -1152,6 +1239,8 @@ def create_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
         "accession_id": item.get("accession_id") or f"IMP-{int(now.timestamp())}",
         "clinician_suggestion": item.get("clinician_suggestion") or "Dr. Layla Al-Hashimi (OB-GYN)",
         "summary_note": item["summary_note"],
+        "evidence_date": item.get("evidence_date") or _iso_today_offset(0),
+        "status": item.get("status") or "ACTIVE",
         "recorded_at": now,
     }
     engine = get_engine()
@@ -1168,13 +1257,53 @@ def create_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
     return dict(record)
 
 
+def update_evidence_record(evidence_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    """Update an existing clinical evidence record (e.g., marking it CORRECTED)."""
+    engine = get_engine()
+    if engine is None:
+        for item in _MEMORY_EVIDENCE:
+            if item["id"] == evidence_id:
+                item.update(updates)
+                return dict(item)
+        return None
+    ensure_schema_and_seed()
+    with engine.begin() as conn:
+        conn.execute(
+            clinical_evidence_table.update()
+            .where(clinical_evidence_table.c.id == evidence_id)
+            .values(**updates)
+        )
+        row = (
+            conn.execute(
+                select(clinical_evidence_table).where(clinical_evidence_table.c.id == evidence_id)
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+
 def reset_obligations(patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
     """Reset synthetic demo data back to initial preconception state."""
     now = datetime.now(UTC)
+    today_iso = _iso_today_offset(0)
+    seed_obls = [
+        {**_OBLIGATION_OPTIONAL_DEFAULTS, **item, "updated_at": now}
+        for item in ALL_SEED_OBLIGATIONS
+    ]
+    seed_ev = [
+        {
+            **_EVIDENCE_OPTIONAL_DEFAULTS,
+            **item,
+            "evidence_date": item.get("evidence_date") or today_iso,
+            "recorded_at": now,
+        }
+        for item in SEED_CLINICAL_EVIDENCE
+    ]
     engine = get_engine()
     if engine is None:
         _MEMORY_STORE.clear()
-        _MEMORY_STORE.extend([{**item, "updated_at": now} for item in ALL_SEED_OBLIGATIONS])
+        _MEMORY_STORE.extend(seed_obls)
         _MEMORY_AUDIT.clear()
         _MEMORY_AUDIT.extend(
             [
@@ -1183,25 +1312,19 @@ def reset_obligations(patient_id: str = "PAT-AE-4092") -> dict[str, Any]:
             ]
         )
         _MEMORY_EVIDENCE.clear()
-        _MEMORY_EVIDENCE.extend([{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE])
+        _MEMORY_EVIDENCE.extend(seed_ev)
     else:
         ensure_schema_and_seed()
         with engine.begin() as conn:
             conn.execute(obligations_table.delete())
             conn.execute(audit_events_table.delete())
             conn.execute(clinical_evidence_table.delete())
-            conn.execute(
-                obligations_table.insert(),
-                [{**item, "updated_at": now} for item in ALL_SEED_OBLIGATIONS],
-            )
+            conn.execute(obligations_table.insert(), seed_obls)
             conn.execute(
                 audit_events_table.insert(),
                 [{**item, "created_at": now} for item in SEED_AUDIT_EVENTS],
             )
-            conn.execute(
-                clinical_evidence_table.insert(),
-                [{**item, "recorded_at": now} for item in SEED_CLINICAL_EVIDENCE],
-            )
+            conn.execute(clinical_evidence_table.insert(), seed_ev)
 
     obls = list_obligations(patient_id=patient_id)
     obl_ids = None if patient_id == "ALL" else {str(o["id"]) for o in obls}

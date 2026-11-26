@@ -45,7 +45,14 @@ class ClosureGuardResult:
 _BP_READING_RE = re.compile(r"\b(\d{2,3})\s*/\s*(\d{2,3})\b")
 _BOOKING_ONLY_RE = re.compile(
     r"\b(?:appointment|booked|booking|scheduled|rescheduled|referral\s+sent|"
-    r"lab\s+ordered|order\s+placed|pending\s+(?:lab|test|visit|appointment))\b",
+    r"lab\s+ordered|test\s+ordered|order\s+(?:placed|approved|submitted)|"
+    r"requisition\s+(?:placed|sent|approved)|clinician\s+approved|approval\s+only|"
+    r"pending\s+(?:lab|test|visit|appointment|result))\b",
+    flags=re.IGNORECASE,
+)
+_QUALIFYING_THYROID_RESULT_RE = re.compile(
+    r"\b(?:tsh\s*[:=]?\s*\d|miu/l|free\s*t4|ft4|pmol/l|ng/dl|normalized|"
+    r"within\s+(?:trimester\s+1\s+)?target|repeat\s+tsh\s+\d|qualifying\s+result)\b",
     flags=re.IGNORECASE,
 )
 _COMPLETED_OGTT_RE = re.compile(
@@ -175,7 +182,9 @@ def _has_mh_safety_concern(event_context: dict[str, Any], text_ctx: str) -> bool
 
 def detect_open_obligations(state: TransitionState) -> dict[str, Any]:
     """Deterministic step: filter unresolved obligations requiring reassessment."""
-    open_items = [o for o in state["obligations"] if o["status"] != "VERIFIED_CLOSED"]
+    open_items = [
+        o for o in state["obligations"] if o["status"] not in {"VERIFIED_CLOSED", "DISMISSED_STALE"}
+    ]
     trace = list(state.get("trace", []))
     trace.append(
         {
@@ -201,20 +210,30 @@ def _evaluate_rule_for_obligation(
 
     if event_type == "FHIR_PREGNANCY_CONFIRMED":
         if rule_ver.startswith("RB-THYROID-"):
+            today = _parse_iso_date(ctx.get("event_date"))
+            win_start = str(item.get("due_window_start") or today.isoformat())
+            win_end = str(item.get("due_window_end") or _iso_plus_days(today, 9))
             return {
                 "id": obl_id,
                 "life_stage": "Antenatal (Trimester 1)",
                 "priority": "URGENT",
                 "status": "ESCALATED_FOR_REVIEW",
-                "owner": "Maternal-Fetal Medicine / OB-GYN",
-                "due_label": "Due ≤ 72h (T1 TSH <2.5 mIU/L)",
+                "owner": (
+                    item.get("owner")
+                    if item.get("owner") and not str(item.get("owner")).startswith("Unassigned")
+                    else "Maternal-Fetal Medicine / OB-GYN"
+                ),
+                "due_window_start": win_start,
+                "due_window_end": win_end,
+                "due_label": "9 days remaining · Repeat TSH + Free T4 required",
+                "closure_policy": "QUALIFYING_RESULT_IN_WINDOW",
                 "protocol_code": "ATA-THYROID-T1",
                 "rationale": (
                     "PREGNANCY TRANSITION TRIGGERED: Adolescent-onset Hashimoto's hypothyroidism "
-                    "(age 16) contributed to prior miscarriage at age 31 when follow-up was lost. "
-                    "Now pregnant again at 32 with TSH 4.8 mIU/L exceeding first-trimester target "
-                    "(<2.5 mIU/L). Urgent levothyroxine evaluation and repeat thyroid panel routed "
-                    "for immediate clinician approval."
+                    "(2011 Hospital A note at age 16) carried into 2026 Hospital B pregnancy intake "
+                    "(age 31) with TSH 4.8 mIU/L exceeding first-trimester target (<2.5 mIU/L). "
+                    "Urgent repeat TSH + Free T4 and endocrine review routed; approval or test "
+                    "order leaves the task open until a dated, qualifying result is verified."
                 ),
             }
         if rule_ver.startswith("RB-IMMUNE-"):
@@ -809,9 +828,143 @@ def evaluate_life_stage_transition(state: TransitionState) -> dict[str, Any]:
     }
 
 
+def compute_days_remaining(
+    obligation: dict[str, Any],
+    as_of: date | None = None,
+) -> int | None:
+    """Deterministically compute days remaining until due_window_end (or None if unset/closed)."""
+    status = str(obligation.get("status") or "")
+    if status in {"VERIFIED_CLOSED", "DISMISSED_STALE"}:
+        return None
+    raw_end = obligation.get("due_window_end")
+    if not isinstance(raw_end, str) or not raw_end.strip():
+        return None
+    try:
+        end_date = date.fromisoformat(raw_end.strip()[:10])
+    except ValueError:
+        return None
+    ref = as_of or datetime.now(UTC).date()
+    return (end_date - ref).days
+
+
+def calculate_confirmed_due_window(
+    obligation: dict[str, Any],
+    as_of: date | None = None,
+) -> dict[str, Any]:
+    """Deterministically calculate the active due window when a clinician confirms relevance."""
+    ref = as_of or datetime.now(UTC).date()
+    rule_ver = str(obligation.get("rule_version") or "").upper()
+    window_days = 9 if rule_ver.startswith("RB-THYROID-") else 14
+    win_start = ref.isoformat()
+    win_end = _iso_plus_days(ref, window_days)
+    due_label = (
+        f"{window_days} days remaining · Repeat TSH + Free T4 required"
+        if rule_ver.startswith("RB-THYROID-")
+        else f"{window_days} days remaining · Qualifying follow-up required"
+    )
+    return {
+        "due_window_start": win_start,
+        "due_window_end": win_end,
+        "due_label": due_label,
+    }
+
+
+def evaluate_evidence_correction(
+    obligation: dict[str, Any],
+    correction_reason: str,
+    clinician_name: str,
+    as_of: date | None = None,
+) -> dict[str, Any]:
+    """Deterministically reopen a VERIFIED_CLOSED obligation when closing evidence is corrected."""
+    ref = as_of or datetime.now(UTC).date()
+    win_start = obligation.get("due_window_start") or ref.isoformat()
+    win_end = obligation.get("due_window_end") or _iso_plus_days(ref, 9)
+    days_left = compute_days_remaining({"status": "REOPENED", "due_window_end": win_end}, as_of=ref)
+    due_label = (
+        f"{days_left} days remaining · Reopened after evidence correction"
+        if days_left is not None and days_left >= 0
+        else "Overdue · Reopened after evidence correction"
+    )
+    return {
+        "status": "REOPENED",
+        "verified_by": None,
+        "closure_evidence": None,
+        "reopened_by": clinician_name.strip(),
+        "reopened_reason": correction_reason.strip(),
+        "due_window_start": win_start,
+        "due_window_end": win_end,
+        "due_label": due_label,
+    }
+
+
+def verify_explanation_fields(
+    obligation: dict[str, Any],
+    explanation_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Server-side deterministic verification that AI explanation matches authoritative fields."""
+    status = str(obligation.get("status") or "OPEN")
+    owner = str(obligation.get("owner") or "Unassigned")
+    policy = str(obligation.get("closure_policy") or "CLINICIAN_EVIDENCE")
+    days_remaining = compute_days_remaining(obligation)
+
+    combined = " ".join(
+        [
+            str(explanation_result.get("headline") or ""),
+            str(explanation_result.get("explanation") or ""),
+            " ".join(str(p) for p in (explanation_result.get("key_points") or [])),
+        ]
+    ).lower()
+
+    discrepancies: list[str] = []
+
+    # 1. Status consistency check
+    if status in {"OPEN", "ESCALATED_FOR_REVIEW", "REOPENED"} and re.search(
+        r"\b(?:already\s+closed|task\s+is\s+closed|verified\s+and\s+closed)\b", combined
+    ):
+        discrepancies.append(
+            f"Explanation suggested closure, but authoritative status is {status}."
+        )
+    if status == "VERIFIED_CLOSED" and re.search(
+        r"\b(?:still\s+open|remains\s+unverified)\b", combined
+    ):
+        discrepancies.append(
+            "Explanation described task as still open, but authoritative status is VERIFIED_CLOSED."
+        )
+
+    # 2. Closure-policy consistency check
+    if policy in {"QUALIFYING_RESULT_IN_WINDOW", "COMPLETED_TEST_NOT_BOOKING"} and re.search(
+        r"\b(?:booking\s+(?:alone\s+)?closes|order\s+(?:alone\s+)?closes|approval\s+closes)\b",
+        combined,
+    ):
+        discrepancies.append(
+            f"Explanation contradicted closure policy {policy}: orders/approvals leave the task open."
+        )
+
+    # 3. Pregnancy deferral safety check
+    if status == "DEFERRED_TO_POSTPARTUM" and re.search(
+        r"\b(?:administer\s+now|give\s+during\s+pregnancy)\b", combined
+    ):
+        discrepancies.append(
+            "Explanation contradicted DEFERRED_TO_POSTPARTUM pregnancy contraindication."
+        )
+
+    return {
+        "verified": len(discrepancies) == 0,
+        "checked_fields": ["status", "owner", "due_window", "closure_policy"],
+        "discrepancies": discrepancies,
+        "authoritative_snapshot": {
+            "status": status,
+            "owner": owner,
+            "days_remaining": days_remaining,
+            "closure_policy": policy,
+        },
+    }
+
+
 def validate_closure_policy(
     obligation: dict[str, Any],
     closure_evidence: str,
+    evidence_date: str | None = None,
 ) -> ClosureGuardResult:
     """Enforce deterministic per-rule clinical closure guards before allowing VERIFIED_CLOSED."""
     status = str(obligation.get("status") or "")
@@ -819,6 +972,64 @@ def validate_closure_policy(
     policy = str(obligation.get("closure_policy") or "CLINICIAN_EVIDENCE").upper()
     life_stage = str(obligation.get("life_stage") or "")
     text = closure_evidence.strip()
+
+    # 0. Qualifying result in window (HealthX live demo guard: approval/order leaves task open)
+    if policy == "QUALIFYING_RESULT_IN_WINDOW":
+        has_qualifying = bool(_QUALIFYING_THYROID_RESULT_RE.search(text))
+        if _BOOKING_ONLY_RE.search(text) and not has_qualifying:
+            return ClosureGuardResult(
+                allowed=False,
+                reason=(
+                    "Clinical safety guard (Order / Approval Leaves Task Open): Approving a plan "
+                    "or placing a test order does not close this obligation. Document a dated, "
+                    "qualifying repeat TSH / thyroid result within the required window."
+                ),
+            )
+        if not has_qualifying:
+            return ClosureGuardResult(
+                allowed=False,
+                reason=(
+                    "Clinical safety guard (Qualifying Result Required): Submitted evidence does "
+                    "not contain a qualifying TSH / Free T4 lab result. Task remains open until "
+                    "the right test result is verified."
+                ),
+            )
+        if evidence_date and evidence_date.strip():
+            try:
+                ev_dt = date.fromisoformat(evidence_date.strip()[:10])
+            except ValueError:
+                return ClosureGuardResult(
+                    allowed=False,
+                    reason=(
+                        "Clinical safety guard (Invalid Evidence Date): Provide a valid YYYY-MM-DD "
+                        "result date within the required follow-up window."
+                    ),
+                )
+            win_start_raw = obligation.get("due_window_start")
+            win_end_raw = obligation.get("due_window_end")
+            if isinstance(win_start_raw, str) and win_start_raw.strip():
+                start_dt = date.fromisoformat(win_start_raw.strip()[:10])
+                if ev_dt < start_dt:
+                    return ClosureGuardResult(
+                        allowed=False,
+                        reason=(
+                            f"Clinical safety guard (Out-of-Window Evidence): Result dated "
+                            f"{ev_dt.isoformat()} precedes the required follow-up window "
+                            f"(starts {start_dt.isoformat()}). Historical or stale results cannot "
+                            "close an active pregnancy follow-up."
+                        ),
+                    )
+            if isinstance(win_end_raw, str) and win_end_raw.strip():
+                end_dt = date.fromisoformat(win_end_raw.strip()[:10])
+                if ev_dt > end_dt:
+                    return ClosureGuardResult(
+                        allowed=False,
+                        reason=(
+                            f"Clinical safety guard (Out-of-Window Evidence): Result dated "
+                            f"{ev_dt.isoformat()} falls after the due window end "
+                            f"({end_dt.isoformat()})."
+                        ),
+                    )
 
     # 1. Pregnancy-deferred obligations (live vaccines, deferred HPV, deferred postpartum cervical)
     if status == "DEFERRED_TO_POSTPARTUM" or policy == "DEFERRED_UNTIL_POSTPARTUM":

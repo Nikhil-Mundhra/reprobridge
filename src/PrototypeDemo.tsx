@@ -13,6 +13,7 @@ import ObligationPassportSection from "./demo/ObligationPassportSection";
 import OrchestratorHarnessSection from "./demo/OrchestratorHarnessSection";
 import PatientCohortBar from "./demo/PatientCohortBar";
 import VerifyClosureModal from "./demo/VerifyClosureModal";
+import ZeroSharingPassportModal from "./demo/ZeroSharingPassportModal";
 import { DEFAULT_PATIENT_COHORT } from "./demo/constants";
 import { readDocsSessionPrefs, type DocsSessionPrefs } from "./demo/docsSessionPrefs";
 import { parseStreamedSections } from "./demo/helpers";
@@ -111,11 +112,14 @@ export default function PrototypeDemo({
   const [trace, setTrace] = useState<TraceStep[]>(() => initialTransitionResult?.trace ?? []);
 
   const [verifyTarget, setVerifyTarget] = useState<Obligation | null>(null);
+  const [passportTarget, setPassportTarget] = useState<Obligation | null>(null);
   const [clinicianName, setClinicianName] = useState("Dr. Layla Al-Hashimi (OB-GYN)");
   const [showIntakeModal, setShowIntakeModal] = useState(false);
   const [showFhirExportModal, setShowFhirExportModal] = useState(false);
 
   const [testingSafetyId, setTestingSafetyId] = useState<string | null>(null);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [safetyBlockFeedback, setSafetyBlockFeedback] = useState<
     Record<string, SafetyBlockInfo>
   >({});
@@ -688,6 +692,66 @@ export default function PrototypeDemo({
             void handleExplainObligation(obl);
           }}
           explainingId={explainLoading ? explainTarget?.id ?? null : null}
+          defaultClinicianName={clinicianName}
+          reviewingId={reviewingId}
+          reopeningId={reopeningId}
+          onOpenZeroSharingPassport={setPassportTarget}
+          onReviewObligation={async (obl, payload) => {
+            setReviewingId(obl.id);
+            setError(null);
+            try {
+              const res = await fetch(`/api/obligations/${obl.id}/review`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: payload.action,
+                  clinician_name: clinicianName,
+                  owner: payload.owner,
+                  reason: payload.reason,
+                }),
+              });
+              if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody.detail || "Clinician review action failed");
+              }
+              const data = await res.json();
+              if (data.obligations) setObligations(data.obligations);
+              if (data.audit_events) setAuditEvents(data.audit_events);
+              if (data.patients) setPatients(data.patients);
+              if (data.cohort_totals) setCohortTotals(data.cohort_totals);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Clinician review failed");
+            } finally {
+              setReviewingId(null);
+            }
+          }}
+          onCorrectEvidence={async (obl, correctionReason) => {
+            setReopeningId(obl.id);
+            setError(null);
+            try {
+              const res = await fetch(`/api/obligations/${obl.id}/correct-evidence`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  clinician_name: clinicianName,
+                  correction_reason: correctionReason,
+                }),
+              });
+              if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody.detail || "Evidence correction failed");
+              }
+              const data = await res.json();
+              if (data.obligations) setObligations(data.obligations);
+              if (data.audit_events) setAuditEvents(data.audit_events);
+              if (data.patients) setPatients(data.patients);
+              if (data.cohort_totals) setCohortTotals(data.cohort_totals);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Evidence correction failed");
+            } finally {
+              setReopeningId(null);
+            }
+          }}
         />
 
         <CareSiteContinuitySpine
@@ -738,6 +802,14 @@ export default function PrototypeDemo({
           }}
           onAuditUpdated={setAuditEvents}
           onError={setError}
+        />
+      )}
+
+      {passportTarget && (
+        <ZeroSharingPassportModal
+          target={passportTarget}
+          onClose={() => setPassportTarget(null)}
+          onAuditUpdated={setAuditEvents}
         />
       )}
 

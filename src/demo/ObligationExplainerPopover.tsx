@@ -506,6 +506,34 @@ export default function ObligationExplainerPopover({
               </ul>
             )}
 
+            {data.field_verification && (
+              <div
+                className={`rounded-xl border px-3 py-2 text-[11px] ${
+                  data.field_verification.verified
+                    ? "border-emerald-200 bg-emerald-50/70 text-emerald-900"
+                    : "border-amber-300 bg-amber-50 text-amber-950"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-1.5 font-semibold">
+                  <span className="inline-flex items-center gap-1">
+                    <ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    Server Field Check:{" "}
+                    {data.field_verification.verified ? "Verified" : "Discrepancy Flagged"}
+                  </span>
+                  <span className="font-mono text-[10px] opacity-80">
+                    {data.field_verification.checked_fields.join(" · ")}
+                  </span>
+                </div>
+                {data.field_verification.discrepancies.length > 0 && (
+                  <ul className="mt-1 list-disc pl-4 text-[11px]">
+                    {data.field_verification.discrepancies.map((d, i) => (
+                      <li key={i}>{d}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
             <p className="border-t border-slate-100 pt-2.5 text-[11px] leading-relaxed text-slate-500">
               {data.disclaimer}
             </p>

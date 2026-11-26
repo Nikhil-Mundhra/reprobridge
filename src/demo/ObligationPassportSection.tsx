@@ -1,17 +1,22 @@
 import { useState } from "react";
 import {
   ArrowRight,
+  Ban,
   CheckCircle2,
   Clock,
   Code2,
   FileCheck2,
   FileText,
   GitBranch,
+  KeyRound,
   Lock,
+  Quote,
+  RotateCcw,
   Send,
   ShieldAlert,
   Sparkles,
   Upload,
+  UserCheck,
   X,
 } from "lucide-react";
 import { getDefaultDocIdForObligation } from "../ClinicalDocumentsDrawer";
@@ -29,10 +34,28 @@ function getPlainStatusBadge(obl: Obligation): { label: string; className: strin
       className: "border-emerald-200 bg-emerald-50 text-emerald-800",
     };
   }
+  if (obl.status === "DISMISSED_STALE") {
+    return {
+      label: "Dismissed · Stale Finding",
+      className: "border-slate-300 bg-slate-100 text-slate-600",
+    };
+  }
+  if (obl.status === "REOPENED") {
+    return {
+      label: "Reopened · Evidence Corrected",
+      className: "border-rose-300 bg-rose-50 text-rose-900",
+    };
+  }
   if (obl.status === "DEFERRED_TO_POSTPARTUM") {
     return {
       label: "Deferred until Postpartum",
       className: "border-indigo-200 bg-indigo-50 text-indigo-800",
+    };
+  }
+  if (obl.review_state === "UNVERIFIED_FROM_NOTE") {
+    return {
+      label: "Unverified Follow-up · From Note",
+      className: "border-amber-300 bg-amber-50 text-amber-900",
     };
   }
   if (obl.status === "ESCALATED_FOR_REVIEW") {
@@ -110,6 +133,15 @@ interface ObligationPassportSectionProps {
   onOpenClinicalDocument: (docId: string) => void;
   onExplainObligation: (obl: Obligation) => void;
   explainingId?: string | null;
+  defaultClinicianName?: string;
+  onReviewObligation?: (
+    obl: Obligation,
+    payload: { action: "confirm" | "dismiss"; owner?: string; reason?: string }
+  ) => Promise<void>;
+  onCorrectEvidence?: (obl: Obligation, correctionReason: string) => Promise<void>;
+  onOpenZeroSharingPassport?: (obl: Obligation) => void;
+  reviewingId?: string | null;
+  reopeningId?: string | null;
 }
 
 export default function ObligationPassportSection({
@@ -126,8 +158,21 @@ export default function ObligationPassportSection({
   onOpenClinicalDocument,
   onExplainObligation,
   explainingId,
+  defaultClinicianName = "Dr. Layla Al-Hashimi (Hospital B OB-GYN)",
+  onReviewObligation,
+  onCorrectEvidence,
+  onOpenZeroSharingPassport,
+  reviewingId,
+  reopeningId,
 }: ObligationPassportSectionProps) {
   const [expandedFhirId, setExpandedFhirId] = useState<string | null>(null);
+  const [ownerDrafts, setOwnerDrafts] = useState<Record<string, string>>({});
+  const [dismissOpenId, setDismissOpenId] = useState<string | null>(null);
+  const [dismissReason, setDismissReason] = useState("");
+  const [correctOpenId, setCorrectOpenId] = useState<string | null>(null);
+  const [correctionReason, setCorrectionReason] = useState(
+    "Lab amended: specimen hemolyzed / wrong accession linked — repeat in-window TSH required."
+  );
 
   return (
     <section className="space-y-4">
@@ -208,7 +253,17 @@ export default function ObligationPassportSection({
                   >
                     {statusBadge.label}
                   </span>
-                  {urgentDue && (
+                  {obl.days_remaining != null &&
+                    obl.status !== "VERIFIED_CLOSED" &&
+                    obl.status !== "DISMISSED_STALE" && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-teal-300 bg-teal-50 px-2.5 py-0.5 font-mono text-[11px] font-semibold text-teal-900">
+                        <Clock className="h-3 w-3 text-teal-700" aria-hidden="true" />
+                        {obl.days_remaining >= 0
+                          ? `${obl.days_remaining} days remaining`
+                          : `${Math.abs(obl.days_remaining)} days overdue`}
+                      </span>
+                    )}
+                  {urgentDue && obl.days_remaining == null && (
                     <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 font-mono text-[11px] font-medium text-rose-800">
                       <Clock className="h-3 w-3" aria-hidden="true" />
                       {urgentDue}
@@ -266,8 +321,22 @@ export default function ObligationPassportSection({
                     {testingSafetyId === obl.id ? "Testing Guard…" : "Test Safety Guard"}
                   </button>
                 </div>
+              ) : obl.status === "VERIFIED_CLOSED" ? (
+                onCorrectEvidence && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCorrectOpenId((prev) => (prev === obl.id ? null : obl.id))
+                    }
+                    disabled={loading || reopeningId === obl.id}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 transition hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                    Correct Evidence / Reopen
+                  </button>
+                )
               ) : (
-                obl.status !== "VERIFIED_CLOSED" && (
+                obl.status !== "DISMISSED_STALE" && (
                   <button
                     onClick={() => onOpenVerifyModal(obl)}
                     disabled={loading}
@@ -279,6 +348,190 @@ export default function ObligationPassportSection({
                 )
               )}
             </div>
+
+            {obl.source_quote && (
+              <div className="mt-3 rounded-lg border border-indigo-200/80 bg-indigo-50/50 p-3 text-xs text-slate-800">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-indigo-950">
+                    <Quote className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
+                    Quoted Source Sentence
+                    {obl.source_facility ? ` · ${obl.source_facility}` : ""}
+                    {obl.source_note_date ? ` (${obl.source_note_date})` : ""}
+                  </span>
+                  {obl.source_doc_id && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenClinicalDocument(obl.source_doc_id as string)}
+                      className="inline-flex items-center gap-1 rounded border border-indigo-200 bg-white px-2 py-0.5 text-[11px] font-medium text-indigo-800 hover:bg-indigo-100/70"
+                    >
+                      <FileText className="h-3 w-3" aria-hidden="true" />
+                      Open Source Note
+                    </button>
+                  )}
+                </div>
+                <blockquote className="mt-1.5 border-l-2 border-indigo-400 pl-2.5 italic leading-relaxed text-slate-700">
+                  &ldquo;{obl.source_quote}&rdquo;
+                </blockquote>
+              </div>
+            )}
+
+            {obl.review_state === "UNVERIFIED_FROM_NOTE" &&
+              obl.status !== "VERIFIED_CLOSED" &&
+              obl.status !== "DISMISSED_STALE" &&
+              onReviewObligation && (
+                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50/80 p-3.5 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-semibold text-amber-950">
+                      Clinician Review Required · Confirm Present Relevance &amp; Assign Owner
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDismissOpenId((prev) => (prev === obl.id ? null : obl.id));
+                        setDismissReason("");
+                      }}
+                      className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100"
+                    >
+                      <Ban className="h-3 w-3" aria-hidden="true" />
+                      Dismiss Stale Finding
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      aria-label={`Assign owner for ${obl.id}`}
+                      value={ownerDrafts[obl.id] ?? defaultClinicianName}
+                      onChange={(e) =>
+                        setOwnerDrafts((prev) => ({ ...prev, [obl.id]: e.target.value }))
+                      }
+                      placeholder="Assigned clinician / team owner"
+                      className="min-w-[220px] flex-1 rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-teal-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={loading || reviewingId === obl.id}
+                      onClick={() => {
+                        void onReviewObligation(obl, {
+                          action: "confirm",
+                          owner: (ownerDrafts[obl.id] ?? defaultClinicianName).trim(),
+                        });
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:opacity-50"
+                    >
+                      <UserCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                      {reviewingId === obl.id
+                        ? "Confirming…"
+                        : "Confirm Relevance & Take Ownership"}
+                    </button>
+                  </div>
+                  {dismissOpenId === obl.id && (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-amber-200 pt-2.5">
+                      <input
+                        type="text"
+                        value={dismissReason}
+                        onChange={(e) => setDismissReason(e.target.value)}
+                        placeholder="Reason finding is stale or no longer clinically applicable…"
+                        className="min-w-[220px] flex-1 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-rose-500 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={loading || reviewingId === obl.id || dismissReason.trim().length < 4}
+                        onClick={async () => {
+                          await onReviewObligation(obl, {
+                            action: "dismiss",
+                            reason: dismissReason.trim(),
+                          });
+                          setDismissOpenId(null);
+                          setDismissReason("");
+                        }}
+                        className="rounded-md bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        Confirm Dismiss
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+            {obl.status === "REOPENED" && (
+              <div
+                role="status"
+                className="mt-3 rounded-lg border border-rose-300 bg-rose-50/90 p-3.5 text-xs text-rose-950"
+              >
+                <div className="flex items-center gap-1.5 font-semibold text-rose-900">
+                  <RotateCcw className="h-3.5 w-3.5 text-rose-600" aria-hidden="true" />
+                  Task Automatically Reopened After Evidence Correction
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded bg-white/80 p-2 ring-1 ring-rose-200">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-700">
+                      Why It&apos;s Open
+                    </p>
+                    <p className="mt-0.5 text-slate-800">
+                      {obl.reopened_reason || "Closing evidence was corrected or amended."}
+                    </p>
+                  </div>
+                  <div className="rounded bg-white/80 p-2 ring-1 ring-rose-200">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-700">
+                      Who Owns It
+                    </p>
+                    <p className="mt-0.5 font-medium text-slate-900">{obl.owner}</p>
+                  </div>
+                  <div className="rounded bg-white/80 p-2 ring-1 ring-rose-200">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-700">
+                      What Closes It
+                    </p>
+                    <p className="mt-0.5 text-slate-800">
+                      {closurePolicyLabel || "Dated, qualifying clinical result verified by clinician."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {obl.status === "DISMISSED_STALE" && (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-700">
+                <span className="font-semibold text-slate-900">
+                  Dismissed by {obl.dismissed_by || "Clinician"}:
+                </span>{" "}
+                {obl.dismissed_reason}
+              </div>
+            )}
+
+            {correctOpenId === obl.id && obl.status === "VERIFIED_CLOSED" && onCorrectEvidence && (
+              <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3.5 text-xs">
+                <p className="font-semibold text-amber-950">
+                  Correct / Amend Closing Evidence (Reopens Task &amp; Logs Audit Entry)
+                </p>
+                <textarea
+                  rows={2}
+                  value={correctionReason}
+                  onChange={(e) => setCorrectionReason(e.target.value)}
+                  className="mt-2 w-full rounded-md border border-amber-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-amber-500 focus:outline-none"
+                />
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCorrectOpenId(null)}
+                    className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={loading || reopeningId === obl.id || correctionReason.trim().length < 4}
+                    onClick={async () => {
+                      await onCorrectEvidence(obl, correctionReason.trim());
+                      setCorrectOpenId(null);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md bg-amber-700 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-800 disabled:opacity-50"
+                  >
+                    <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                    {reopeningId === obl.id ? "Reopening…" : "Submit Correction & Reopen"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {safetyBlock && (
               <div
@@ -360,6 +613,20 @@ export default function ObligationPassportSection({
                 <Sparkles className="h-3.5 w-3.5 text-teal-700" aria-hidden="true" />
                 {explainingId === obl.id ? "Explaining…" : "Explain"}
               </button>
+              {onOpenZeroSharingPassport && (
+                <button
+                  type="button"
+                  onClick={() => onOpenZeroSharingPassport(obl)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 bg-indigo-50/80 px-2.5 py-1 text-xs font-semibold text-indigo-800 transition hover:bg-indigo-100"
+                >
+                  <KeyRound className="h-3.5 w-3.5 text-indigo-700" aria-hidden="true" />
+                  {obl.status === "VERIFIED_CLOSED"
+                    ? "Proof-of-Closure Passport"
+                    : obl.status === "REOPENED"
+                      ? "Proof-of-Reopen Passport"
+                      : "Zero-Sharing Passport"}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onOpenClinicalDocument(getDefaultDocIdForObligation(obl.id))}

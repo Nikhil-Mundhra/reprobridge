@@ -17,6 +17,17 @@ export interface Obligation {
   due_label?: string | null;
   closure_policy?: string | null;
   protocol_code?: string | null;
+  source_quote?: string | null;
+  source_note_date?: string | null;
+  source_facility?: string | null;
+  source_doc_id?: string | null;
+  review_state?: string | null;
+  relevance_confirmed_by?: string | null;
+  dismissed_by?: string | null;
+  dismissed_reason?: string | null;
+  reopened_by?: string | null;
+  reopened_reason?: string | null;
+  days_remaining?: number | null;
   verified_by: string | null;
   closure_evidence: string | null;
 }
@@ -62,6 +73,8 @@ export interface ClinicalEvidence {
   accession_id: string;
   clinician_suggestion: string;
   summary_note: string;
+  evidence_date?: string | null;
+  status?: string | null;
   recorded_at: string;
 }
 
@@ -136,6 +149,18 @@ export interface CohortTotals {
   total_closed: number;
 }
 
+export interface ExplanationFieldVerification {
+  verified: boolean;
+  checked_fields: string[];
+  discrepancies: string[];
+  authoritative_snapshot: {
+    status: string;
+    owner: string;
+    days_remaining: number | null;
+    closure_policy: string;
+  };
+}
+
 export interface ObligationExplanationResponse {
   obligation_id: string;
   headline: string;
@@ -144,6 +169,7 @@ export interface ObligationExplanationResponse {
   disclaimer: string;
   ai_metadata: AiMetadata;
   privacy_report: PrivacyReport;
+  field_verification?: ExplanationFieldVerification;
   audit_events?: AuditEvent[];
 }
 
@@ -194,4 +220,51 @@ export interface ReconciliationOnboardingResult {
   patientId: string;
   reconciliation: ReconciledClinicalContext;
   transitionResult?: ReconciliationTransitionSeed | null;
+}
+
+export interface ObligationPassport {
+  protocol: string;
+  credential_type:
+    | "ReproBridgeObligationPassport"
+    | "ReproBridgeClosureAttestation"
+    | "ReproBridgeReopenAttestation"
+    | string;
+  residency_policy: string;
+  zero_hospital_sharing: boolean;
+  issuer: string;
+  issued_at: string;
+  claims: {
+    obligation_id: string;
+    case_token: string;
+    life_stage: string;
+    clinical_category: string;
+    rule_version: string;
+    status: string;
+    priority: string;
+    closure_policy: string;
+    review_state: string;
+    owner_role: string;
+    days_remaining?: number | null;
+    due_label?: string | null;
+    source_note_sha256: string;
+    raw_chart_bytes_shared: number;
+    source_quote_excerpt?: string;
+    reopen_reason_excerpt?: string;
+  };
+  signature: {
+    alg: string;
+    key_id: string;
+    value: string;
+  };
+  smart_health_link: string;
+}
+
+export interface PassportVerificationResult {
+  valid: boolean;
+  tampered: boolean;
+  verification_mode: string;
+  hospital_a_api_calls: number;
+  raw_chart_exposed: boolean;
+  detail: string;
+  verified_claims: ObligationPassport["claims"] | null;
 }

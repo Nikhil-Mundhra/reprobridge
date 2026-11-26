@@ -6,9 +6,13 @@ context permitted to cross external AI boundaries (e.g., OpenRouter).
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
+import os
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 # Fields that contain direct or indirect PHI and must NEVER leave the local/UAE boundary.
@@ -30,6 +34,14 @@ PHI_FIELDS: frozenset[str] = frozenset(
         "mental_health_notes",
         "safety_plan_details",
         "symptom_free_text",
+        "source_quote",
+        "source_note_date",
+        "source_facility",
+        "relevance_confirmed_by",
+        "dismissed_by",
+        "dismissed_reason",
+        "reopened_by",
+        "reopened_reason",
     }
 )
 
@@ -133,6 +145,22 @@ def _ai_safe_free_text(text: str, forbidden_tokens: list[str]) -> str:
     return redact_medication_directives(scrub_text_phi(text, forbidden_tokens))
 
 
+_CLINICIAN_NAME_RE = re.compile(
+    r"\bDr\.?\s+[A-Z][a-zA-Z'-]+(?:\s+[A-Z][a-zA-Z'-]+){0,3}",
+)
+
+
+def _deidentify_owner_specialty(obligation: dict[str, Any]) -> str:
+    """Return a non-identifying owner/specialty label safe for external AI egress."""
+    raw_owner = str(obligation.get("owner") or "OB-GYN / Primary Care")
+    forbidden = _extract_forbidden_tokens(obligation)
+    scrubbed = scrub_text_phi(raw_owner, forbidden)
+    scrubbed = _CLINICIAN_NAME_RE.sub("Assigned Clinician", scrubbed)
+    scrubbed = re.sub(r"\[REDACTED_PHI\]", "Assigned Clinician", scrubbed)
+    scrubbed = re.sub(r"(?:Assigned Clinician\s*){2,}", "Assigned Clinician ", scrubbed)
+    return re.sub(r"\s{2,}", " ", scrubbed).strip(" ·-()") or "Assigned Clinician"
+
+
 def deidentify_obligation(obligation: dict[str, Any]) -> dict[str, Any]:
     """Strip all PHI from a single obligation record for safe MCP / AI consumption."""
     rule_version = str(obligation.get("rule_version", "UNKNOWN"))
@@ -149,7 +177,7 @@ def deidentify_obligation(obligation: dict[str, Any]) -> dict[str, Any]:
         "rule_version": rule_version,
         "priority": obligation.get("priority"),
         "status": obligation.get("status"),
-        "owner_specialty": obligation.get("owner"),
+        "owner_specialty": _deidentify_owner_specialty(obligation),
     }
     if safe_due_label:
         deid["due_label"] = safe_due_label
@@ -159,6 +187,10 @@ def deidentify_obligation(obligation: dict[str, Any]) -> dict[str, Any]:
         deid["closure_policy"] = obligation.get("closure_policy")
     if obligation.get("parent_obligation_id"):
         deid["parent_obligation_id"] = obligation.get("parent_obligation_id")
+    if obligation.get("review_state"):
+        deid["review_state"] = obligation.get("review_state")
+    if obligation.get("days_remaining") is not None:
+        deid["days_remaining"] = obligation.get("days_remaining")
     return deid
 
 
@@ -225,12 +257,28 @@ def build_ai_safe_payload(
 def _extract_forbidden_tokens(obligation: dict[str, Any]) -> list[str]:
     """Collect identifying strings and sub-tokens from an obligation for strict scrubbing."""
     tokens: list[str] = []
-    for field in ("patient_name", "patient_id", "verified_by"):
+    for field in (
+        "patient_name",
+        "patient_id",
+        "verified_by",
+        "relevance_confirmed_by",
+        "dismissed_by",
+        "reopened_by",
+    ):
         val = obligation.get(field)
         if isinstance(val, str) and val.strip():
             tokens.append(val.strip())
             for part in val.replace("(", " ").replace(")", " ").split():
-                if len(part) >= 4 and part.lower() not in {"synthetic", "ob-gyn"}:
+                if len(part) >= 4 and part.lower() not in {
+                    "synthetic",
+                    "ob-gyn",
+                    "hospital",
+                    "clinic",
+                    "primary",
+                    "care",
+                    "postpartum",
+                    "maternity",
+                }:
                     tokens.append(part)
     return tokens
 
@@ -376,3 +424,184 @@ def _check_keys(obj: Any) -> None:
     elif isinstance(obj, list):
         for item in obj:
             _check_keys(item)
+
+
+_PASSPORT_KEY_ID = "rb-uae-edge-k1"
+
+
+def _get_passport_signing_key() -> bytes:
+    """Return signing key for patient-held cryptographic Obligation Passports."""
+    secret = os.getenv("REPROBRIDGE_PASSPORT_SECRET", "").strip()
+    if not secret:
+        # Deterministic synthetic demo signing key (never used for real PHI).
+        secret = "reprobridge-synthetic-uae-zero-sharing-edge-key-v1"
+    return secret.encode("utf-8")
+
+
+def _canonical_json(data: dict[str, Any]) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _sign_passport_body(body: dict[str, Any]) -> str:
+    digest = hmac.new(
+        _get_passport_signing_key(),
+        _canonical_json(body).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return digest
+
+
+def issue_obligation_passport(
+    obligation: dict[str, Any],
+    *,
+    include_source_quote: bool = True,
+) -> dict[str, Any]:
+    """Issue a patient-held, cryptographically signed Obligation Passport (zero hospital sharing).
+
+    Contains only minimal non-chart clinical obligation claims plus a SHA-256 hash of the
+    source clinical note so a receiving hospital can verify continuity offline without any
+    hospital-to-hospital API call or raw EHR data sharing.
+    """
+    patient_id = str(obligation.get("patient_id") or "UNKNOWN")
+    rule_version = str(obligation.get("rule_version") or "UNKNOWN")
+    status = str(obligation.get("status") or "OPEN")
+
+    if status == "VERIFIED_CLOSED":
+        credential_type = "ReproBridgeClosureAttestation"
+        issuer = "Hospital B · Verified Closure Edge Signer"
+    elif status == "REOPENED":
+        credential_type = "ReproBridgeReopenAttestation"
+        issuer = "Hospital B · Evidence Correction Edge Signer"
+    else:
+        credential_type = "ReproBridgeObligationPassport"
+        issuer = "Hospital A · Patient-Held Edge Signer"
+
+    raw_note_material = "|".join(
+        [
+            str(obligation.get("source_doc_id") or ""),
+            str(obligation.get("source_note_date") or ""),
+            str(obligation.get("source_facility") or ""),
+            str(obligation.get("source_quote") or obligation.get("rationale") or ""),
+        ]
+    )
+    source_note_sha256 = hashlib.sha256(raw_note_material.encode("utf-8")).hexdigest()
+
+    forbidden = _extract_forbidden_tokens(obligation)
+    claims: dict[str, Any] = {
+        "obligation_id": str(obligation.get("id") or ""),
+        "case_token": pseudonymize_patient_id(patient_id),
+        "life_stage": str(obligation.get("life_stage") or ""),
+        "clinical_category": resolve_clinical_category(rule_version),
+        "rule_version": rule_version,
+        "status": status,
+        "priority": str(obligation.get("priority") or "MEDIUM"),
+        "closure_policy": str(obligation.get("closure_policy") or "CLINICIAN_EVIDENCE"),
+        "review_state": str(obligation.get("review_state") or "CONFIRMED_RELEVANT"),
+        "owner_role": _deidentify_owner_specialty(obligation),
+        "days_remaining": obligation.get("days_remaining"),
+        "due_label": (
+            redact_medication_directives(scrub_text_phi(str(obligation["due_label"]), forbidden))
+            if obligation.get("due_label")
+            else None
+        ),
+        "source_note_sha256": source_note_sha256,
+        "raw_chart_bytes_shared": 0,
+    }
+    if include_source_quote and obligation.get("source_quote"):
+        claims["source_quote_excerpt"] = scrub_text_phi(str(obligation["source_quote"]), forbidden)
+    if status == "REOPENED" and obligation.get("reopened_reason"):
+        claims["reopen_reason_excerpt"] = scrub_text_phi(
+            str(obligation["reopened_reason"]), forbidden
+        )
+
+    body: dict[str, Any] = {
+        "protocol": "SMART-HEALTH-LINK-OBLIGATION-v1",
+        "credential_type": credential_type,
+        "residency_policy": "UAE_PHI_LOCAL_ONLY",
+        "zero_hospital_sharing": True,
+        "issuer": issuer,
+        "issued_at": datetime.now(UTC).isoformat(),
+        "claims": claims,
+    }
+
+    # Enforce zero direct PHI leakage inside the portable token.
+    assert_phi_free(body, forbidden_tokens=forbidden)
+
+    sig_hex = _sign_passport_body(body)
+    encoded = base64.urlsafe_b64encode(_canonical_json(body).encode("utf-8")).decode("ascii")
+    smart_health_link = f"shlink://reprobridge.ae/v1/{encoded[:96]}...#{sig_hex[:16]}"
+
+    return {
+        **body,
+        "signature": {
+            "alg": "HMAC-SHA256",
+            "key_id": _PASSPORT_KEY_ID,
+            "value": sig_hex,
+        },
+        "smart_health_link": smart_health_link,
+    }
+
+
+def verify_obligation_passport(passport: dict[str, Any]) -> dict[str, Any]:
+    """Verify a patient-held Obligation Passport offline with zero Hospital A API calls."""
+    sig_obj = passport.get("signature")
+    if not isinstance(sig_obj, dict) or not isinstance(sig_obj.get("value"), str):
+        return {
+            "valid": False,
+            "tampered": True,
+            "verification_mode": "OFFLINE_ZERO_HOSPITAL_API",
+            "hospital_a_api_calls": 0,
+            "raw_chart_exposed": False,
+            "detail": "Missing or malformed cryptographic signature block.",
+            "verified_claims": None,
+        }
+
+    required_keys = (
+        "protocol",
+        "credential_type",
+        "residency_policy",
+        "zero_hospital_sharing",
+        "issuer",
+        "issued_at",
+        "claims",
+    )
+    body = {k: passport[k] for k in required_keys if k in passport}
+    if len(body) != len(required_keys) or not isinstance(body.get("claims"), dict):
+        return {
+            "valid": False,
+            "tampered": True,
+            "verification_mode": "OFFLINE_ZERO_HOSPITAL_API",
+            "hospital_a_api_calls": 0,
+            "raw_chart_exposed": False,
+            "detail": "Passport payload is missing required verifiable credential fields.",
+            "verified_claims": None,
+        }
+
+    expected_sig = _sign_passport_body(body)
+    provided_sig = str(sig_obj.get("value", ""))
+    if not hmac.compare_digest(expected_sig, provided_sig):
+        return {
+            "valid": False,
+            "tampered": True,
+            "verification_mode": "OFFLINE_ZERO_HOSPITAL_API",
+            "hospital_a_api_calls": 0,
+            "raw_chart_exposed": False,
+            "detail": (
+                "TAMPER DETECTED: HMAC-SHA256 signature mismatch. One or more obligation "
+                "claims were altered after signing — rejected by Hospital B verifier."
+            ),
+            "verified_claims": None,
+        }
+
+    return {
+        "valid": True,
+        "tampered": False,
+        "verification_mode": "OFFLINE_ZERO_HOSPITAL_API",
+        "hospital_a_api_calls": 0,
+        "raw_chart_exposed": False,
+        "detail": (
+            f"Cryptographically verified ({body['credential_type']}) via {sig_obj.get('alg', 'HMAC-SHA256')} "
+            "— 0 Hospital A API calls, 0 raw EHR bytes shared."
+        ),
+        "verified_claims": body["claims"],
+    }
